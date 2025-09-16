@@ -1,0 +1,41 @@
+/* PLEASE NOTE: THESE TAILWIND IMPORTS SHOULD NEVER BE DELETED */
+@import 'tailwindcss/base';
+@import 'tailwindcss/components';
+@import 'tailwindcss/utilities';
+/* DO NOT DELETE THESE TAILWIND IMPORTS, OTHERWISE THE STYLING WILL NOT RENDER AT ALL */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+:root {
+  --te-primary: #125C5C;
+  --te-ink-900: #0B1221;
+  --te-ink-700: #1F2937;
+  --te-surface: #FFFFFF;
+  --te-muted: #F3F4F6;
+  --te-border: #E5E7EB;
+  --te-aq: #4C51BF;
+  --te-heat: #E25822;
+  --te-flood: #0E7490;
+  --te-fire: #B91C1C;
+}
+.dark {
+  --te-ink-900: #FFFFFF;
+  --te-ink-700: #9CA3AF;
+  --te-surface: #111827;
+  --te-muted: #1F2937;
+  --te-border: #374151;
+}
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+body {
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+/* Transition for all theme changes */
+.transition-colors {
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
+  transition-timing-function: ease-out;
+  transition-duration: 200ms;
+}
