@@ -1,4 +1,3 @@
-import React from 'react';
 import { ChallengeType } from '../App';
 export interface Challenge {
   id: string;
