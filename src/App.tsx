@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { AppShell } from './components/AppShell';
 import { TrendingChallenges } from './pages/TrendingChallenges';
 import { ChallengeDetail } from './pages/ChallengeDetail';
@@ -27,7 +27,7 @@ export function App() {
   const renderPage = () => {
     switch (currentPage) {
       case 'trending':
-        return <TrendingChallenges activeTab={activeTab} onSelectChallenge={id => handleNavigate('detail', id)} />;
+        return <TrendingChallenges activeTab={activeTab} onSelectChallenge={(id: string) => handleNavigate('detail', id)} />;
       case 'detail':
         return <ChallengeDetail challengeId={selectedChallenge!} challengeType={activeTab} onBack={() => handleNavigate('trending')} />;
       case 'about':
