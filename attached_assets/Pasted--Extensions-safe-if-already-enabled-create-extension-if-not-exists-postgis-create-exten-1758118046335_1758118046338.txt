@@ -1,0 +1,211 @@
+-- === Extensions (safe if already enabled) ===
+create extension if not exists postgis;
+create extension if not exists pg_stat_statements;
+
+-- === Enums ===
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'challenge_type') then
+    create type challenge_type as enum ('air_quality','heat','floods','wildfire');
+  end if;
+  if not exists (select 1 from pg_type where typname = 'freshness') then
+    create type freshness as enum ('live','today','week','stale');
+  end if;
+  if not exists (select 1 from pg_type where typname = 'audience_top') then
+    create type audience_top as enum ('people','nature');
+  end if;
+end$$;
+
+-- === Regions & taxonomy ===
+create table if not exists region (
+  code text primary key,                  -- ISO2 country or NUTS3
+  name text not null,
+  country_code text not null,            -- ISO2
+  audience audience_top not null default 'people',
+  is_enabled boolean not null default true,
+  geom geometry(MULTIPOLYGON, 4326)      -- optional for MVP
+);
+
+create table if not exists region_population (
+  region_code text primary key references region(code) on delete cascade,
+  pop_total bigint not null,
+  updated_at timestamptz default now()
+);
+
+create table if not exists domain_toggle (
+  type challenge_type primary key,
+  is_enabled boolean not null default true
+);
+
+-- === Raw ingests ===
+create table if not exists alert_event (
+  id uuid primary key default gen_random_uuid(),
+  type challenge_type not null check (type in ('heat','floods','wildfire')),
+  source text not null,                           -- 'meteoalarm','ea','glofas','firms','effis'
+  source_native_id text,                          -- for idempotency
+  region_code text references region(code),
+  severity text,
+  properties jsonb,
+  geom geometry(GEOMETRY, 4326),
+  onset timestamptz,
+  expires timestamptz,
+  updated_at timestamptz default now()
+);
+
+create table if not exists aq_observation (
+  id bigserial primary key,
+  station_id text,
+  pollutant text check (pollutant in ('pm25','no2')),
+  value numeric,
+  unit text,
+  aqi_band text,
+  observed_at timestamptz not null,
+  lat double precision,
+  lon double precision,
+  country_code text,
+  region_code text references region(code),
+  source text not null,                            -- 'eea','openaq'
+  raw jsonb
+);
+
+-- === Scores & overrides ===
+create table if not exists challenge_score_day (
+  id bigserial primary key,
+  type challenge_type not null,
+  region_code text references region(code),
+  date date not null,
+  window_hours int not null,                       -- 24|48|72|168
+  intensity numeric not null,                      -- 0..1
+  exposure numeric not null,                       -- 0..1
+  persistence numeric not null,                    -- 0..1
+  score numeric not null,                          -- 0..100
+  freshness freshness not null,
+  inputs_json jsonb,
+  as_of timestamptz not null default now(),
+  unique (type, region_code, date)
+);
+
+create table if not exists admin_override (
+  id uuid primary key default gen_random_uuid(),
+  type challenge_type not null,
+  region_code text references region(code),
+  score numeric not null check (score between 0 and 100),
+  note text,
+  created_by uuid references auth.users(id),
+  created_at timestamptz default now(),
+  active boolean default true
+);
+
+create table if not exists manual_score (
+  id bigserial primary key,
+  type challenge_type not null,
+  region_code text references region(code),
+  score numeric not null check (score between 0 and 100),
+  freshness freshness not null default 'today',
+  intensity numeric,
+  exposure numeric,
+  persistence numeric,
+  inputs_json jsonb,
+  as_of timestamptz default now(),
+  created_by uuid references auth.users(id),
+  created_at timestamptz default now()
+);
+
+-- === Indexes ===
+create index if not exists idx_csd_type_region_date on challenge_score_day (type, region_code, date desc);
+create index if not exists idx_alert_event_type_region_time on alert_event (type, region_code, updated_at desc);
+create index if not exists idx_aq_obs_region_time on aq_observation (region_code, observed_at);
+create index if not exists idx_alert_event_source_native on alert_event (source_native_id);
+
+-- === Views ===
+create or replace view v_latest_score as
+with latest_auto as (
+  select distinct on (type, region_code)
+    type, region_code, score, intensity, exposure, persistence, freshness, inputs_json, as_of
+  from challenge_score_day
+  order by type, region_code, date desc
+),
+latest_manual as (
+  select distinct on (type, region_code)
+    type, region_code, score, intensity, exposure, persistence, freshness, inputs_json, as_of
+  from manual_score
+  order by type, region_code, created_at desc
+)
+select
+  coalesce(ma.type, la.type) as type,
+  coalesce(ma.region_code, la.region_code) as region_code,
+  coalesce(ma.score, la.score) as base_score,
+  coalesce(ma.intensity, la.intensity) as intensity,
+  coalesce(ma.exposure, la.exposure) as exposure,
+  coalesce(ma.persistence, la.persistence) as persistence,
+  coalesce(ma.freshness, la.freshness) as freshness,
+  coalesce(ma.inputs_json, la.inputs_json) as inputs_json,
+  coalesce(ma.as_of, la.as_of) as as_of
+from latest_auto la
+full outer join latest_manual ma
+  on la.type = ma.type and la.region_code = ma.region_code;
+
+create or replace view v_leaderboard as
+select
+  s.type,
+  s.region_code,
+  r.name as region_name,
+  r.country_code,
+  r.audience,
+  coalesce(o.score, s.base_score) as display_score,
+  s.intensity, s.exposure, s.persistence, s.freshness, s.inputs_json, s.as_of,
+  o.note as override_note
+from v_latest_score s
+join region r on r.code = s.region_code and r.is_enabled = true
+join domain_toggle dt on dt.type = s.type and dt.is_enabled = true
+left join lateral (
+  select score, note
+  from admin_override
+  where active = true and type = s.type and region_code = s.region_code
+  order by created_at desc limit 1
+) o on true;
+
+-- === RPCs ===
+create or replace function challenge_detail(p_type challenge_type, p_region text)
+returns jsonb
+language plpgsql stable as $$
+declare row jsonb;
+begin
+  select to_jsonb(lb) into row
+  from v_leaderboard lb
+  where lb.type = p_type and lb.region_code = p_region
+  limit 1;
+  return row;
+end $$;
+
+create or replace function last_fetch_times()
+returns table(source text, last_seen timestamptz)
+language sql stable as $$
+  select source, max(ts) as last_seen
+  from (
+    select source, updated_at as ts from alert_event
+    union all
+    select source, observed_at as ts from aq_observation
+  ) s
+  group by source;
+$$;
+
+-- === RLS & grants ===
+revoke all on alert_event, aq_observation, challenge_score_day, admin_override, manual_score from anon;
+grant select on v_leaderboard to anon;
+grant execute on function challenge_detail to anon;
+grant execute on function last_fetch_times to authenticated;
+
+alter table alert_event enable row level security;
+alter table aq_observation enable row level security;
+alter table challenge_score_day enable row level security;
+alter table admin_override enable row level security;
+alter table manual_score enable row level security;
+
+create policy svc_ingest_alert   on alert_event          for insert to service_role with check (true);
+create policy svc_ingest_aq      on aq_observation       for insert to service_role with check (true);
+create policy svc_write_scores_insert on challenge_score_day for insert to service_role with check (true);
+create policy svc_write_scores_update on challenge_score_day for update to service_role using (true) with check (true);
+
+create policy admin_insert_override on admin_override for insert to authenticated with check (true);
+create policy admin_insert_manual   on manual_score   for insert to authenticated with check (true);

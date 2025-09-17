@@ -1,0 +1,48 @@
+-- Domain toggles
+insert into domain_toggle (type, is_enabled) values
+  ('air_quality', true),
+  ('heat', true),
+  ('floods', true),
+  ('wildfire', true)
+on conflict (type) do update set is_enabled = excluded.is_enabled;
+
+-- Minimal region seed (country-level; add more as needed)
+insert into region (code, name, country_code, audience, is_enabled) values
+  ('GB','United Kingdom','GB', 'people', true),
+  ('FR','France','FR', 'people', true),
+  ('DE','Germany','DE', 'people', true),
+  ('ES','Spain','ES', 'people', true),
+  ('IT','Italy','IT', 'people', true),
+  ('NL','Netherlands','NL', 'people', true),
+  ('BE','Belgium','BE', 'people', true),
+  ('PT','Portugal','PT', 'people', true),
+  ('SE','Sweden','SE', 'people', true),
+  ('DK','Denmark','DK', 'people', true)
+on conflict (code) do nothing;
+
+-- Approximate population (replace with GHSL/official later)
+insert into region_population (region_code, pop_total) values
+  ('GB', 67000000),
+  ('FR', 68000000),
+  ('DE', 84000000),
+  ('ES', 48000000),
+  ('IT', 59000000),
+  ('NL', 17400000),
+  ('BE', 11600000),
+  ('PT', 10300000),
+  ('SE', 10500000),
+  ('DK',  5900000)
+on conflict (region_code) do update set pop_total = excluded.pop_total;
+
+-- Optional: seed a few manual scores so the UI has data on day 1
+insert into manual_score (type, region_code, score, freshness, intensity, exposure, persistence, inputs_json)
+values
+  ('air_quality','GB', 72, 'today', 0.62, 0.70, 0.55, '{"window":"7d","people":12500000,"why":"27% stations poor/very poor"}'),
+  ('heat','ES',        81, 'today', 0.72, 0.85, 0.68, '{"window":"24h","people":1300000,"why":"orange warnings 42% area"}'),
+  ('floods','GB',      64, 'today', 0.50, 0.40, 0.35, '{"window":"48h","people":220000,"why":"5 active warnings"}'),
+  ('wildfire','FR',    57, 'week',  0.44, 0.38, 0.30, '{"window":"72h","people":95000,"why":"VIIRS clusters"}'),
+  ('air_quality','FR', 68, 'today', 0.58, 0.65, 0.52, '{"window":"7d","people":8200000,"why":"PM2.5 elevated in urban areas"}'),
+  ('heat','IT',        75, 'today', 0.68, 0.78, 0.62, '{"window":"24h","people":2100000,"why":"red warnings southern regions"}'),
+  ('floods','NL',      59, 'today', 0.45, 0.42, 0.38, '{"window":"48h","people":180000,"why":"coastal flood risk"}'),
+  ('wildfire','ES',    63, 'today', 0.52, 0.48, 0.42, '{"window":"72h","people":150000,"why":"active fires Catalonia"}')
+on conflict do nothing;

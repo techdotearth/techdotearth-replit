@@ -9,13 +9,19 @@
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
     "preview": "npx vite preview",
     "db:push": "npx drizzle-kit push",
-    "db:studio": "npx drizzle-kit studio"
+    "db:studio": "npx drizzle-kit studio",
+    "server": "npx tsx server/server.ts",
+    "server:dev": "npx tsx watch server/server.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.1",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
     "@types/ws": "^8.18.1",
+    "cors": "^2.8.5",
     "drizzle-kit": "^0.31.4",
     "drizzle-orm": "^0.44.5",
+    "express": "^5.1.0",
     "lucide-react": "^0.441.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

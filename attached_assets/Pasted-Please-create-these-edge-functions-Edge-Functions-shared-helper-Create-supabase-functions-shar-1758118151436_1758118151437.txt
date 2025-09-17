@@ -1,0 +1,488 @@
+Please create these edge functions: 
+Edge Functions — shared helper
+Create /supabase/functions/_shared/supabaseClient.ts:
+// _shared/supabaseClient.ts
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+export const supabaseAdmin = createClient(
+  Deno.env.get("SUPABASE_URL")!,
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  { auth: { persistSession: false } }
+);
+export async function getAuthUser(req: Request) {
+  const authHeader = req.headers.get("Authorization") || "";
+  const token = authHeader.replace("Bearer ", "");
+  if (!token) return null;
+  const client = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_ANON_KEY")!,
+    { global: { headers: { Authorization: `Bearer ${token}` } } }
+  );
+  const { data: { user }, error } = await client.auth.getUser(token);
+  if (error) return null;
+  return user;
+}
+export function json(data: unknown, init: ResponseInit = {}) {
+  return new Response(JSON.stringify(data, null, 2), {
+    headers: { "content-type": "application/json; charset=utf-8" },
+    ...init,
+  });
+}
+
+1) Admin Functions
+1.1 /supabase/functions/admin/override/index.ts
+// admin/override/index.ts
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import { supabaseAdmin, getAuthUser, json } from "../../_shared/supabaseClient.ts";
+
+serve(async (req) => {
+  try {
+    const user = await getAuthUser(req);
+    if (!user) return json({ error: "Unauthorized" }, { status: 401 });
+
+    const body = await req.json().catch(() => ({}));
+    const { type, region_code, score, note } = body ?? {};
+    if (!type || !region_code || typeof score !== "number")
+      return json({ error: "type, region_code, score required" }, { status: 400 });
+
+    const { error } = await supabaseAdmin
+      .from("admin_override")
+      .insert({ type, region_code, score, note, created_by: user.id, active: true });
+
+    if (error) return json({ error: error.message }, { status: 400 });
+    return json({ ok: true });
+  } catch (e) {
+    return json({ error: String(e) }, { status: 500 });
+  }
+});
+
+
+/supabase/functions/admin/override/function.json:
+
+{ "verify_jwt": true }
+
+1.2 /supabase/functions/admin/manual_score/index.ts
+// admin/manual_score/index.ts
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import { supabaseAdmin, getAuthUser, json } from "../../_shared/supabaseClient.ts";
+
+serve(async (req) => {
+  try {
+    const user = await getAuthUser(req);
+    if (!user) return json({ error: "Unauthorized" }, { status: 401 });
+
+    const body = await req.json().catch(() => ({}));
+    const {
+      type, region_code, score, freshness = "today",
+      intensity = null, exposure = null, persistence = null,
+      inputs_json = null
+    } = body ?? {};
+
+    if (!type || !region_code || typeof score !== "number")
+      return json({ error: "type, region_code, score required" }, { status: 400 });
+
+    const { error } = await supabaseAdmin.from("manual_score").insert({
+      type, region_code, score, freshness, intensity, exposure, persistence, inputs_json, created_by: user.id
+    });
+
+    if (error) return json({ error: error.message }, { status: 400 });
+    return json({ ok: true });
+  } catch (e) {
+    return json({ error: String(e) }, { status: 500 });
+  }
+});
+
+
+/supabase/functions/admin/manual_score/function.json:
+
+{ "verify_jwt": true }
+
+1.3 /supabase/functions/admin/backfill/index.ts
+// admin/backfill/index.ts
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import { getAuthUser, json } from "../../_shared/supabaseClient.ts";
+
+serve(async (req) => {
+  try {
+    const user = await getAuthUser(req);
+    if (!user) return json({ error: "Unauthorized" }, { status: 401 });
+
+    const body = await req.json().catch(() => ({}));
+    const { types = ["heat","floods","wildfire","air_quality"], days = 7 } = body ?? {};
+
+    // This function is a dispatcher: call scorer per day or pass a window.
+    // You can also invoke compute_scores_daily directly as a HTTP call if desired.
+    // For now, simply responds OK and relies on scheduled scorer.
+    return json({ ok: true, scheduled: true, types, days });
+  } catch (e) {
+    return json({ error: String(e) }, { status: 500 });
+  }
+});
+
+
+/supabase/functions/admin/backfill/function.json:
+
+{ "verify_jwt": true }
+
+2) Ingestor Functions (stubs)
+
+All ingestors are JWT-optional (cron only). They accept optional query params for manual triggering.
+
+Shared helpers for ingestors — inline minimal per file for clarity.
+2.1 /supabase/functions/ingest_air_quality_hourly/index.ts
+// ingest_air_quality_hourly/index.ts
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import { supabaseAdmin, json } from "../_shared/supabaseClient.ts";
+
+type AQRow = {
+  station_id?: string;
+  pollutant: "pm25" | "no2";
+  value: number;
+  unit?: string;
+  aqi_band?: string;
+  observed_at: string; // ISO
+  lat?: number;
+  lon?: number;
+  country_code?: string; // ISO2
+  region_code?: string;  // use country_code for MVP
+  source: "eea" | "openaq";
+  raw?: unknown;
+};
+
+serve(async (_req) => {
+  try {
+    const OPENAQ_BASE_URL = Deno.env.get("OPENAQ_BASE_URL") ?? "https://api.openaq.org/v3";
+    // TODO: Prefer EEA; fallback to OpenAQ. For MVP we’ll pull a small slice from OpenAQ.
+    // Example (pseudo): fetch latest measurements for pm25/no2 for EU countries.
+    const rows: AQRow[] = []; // populate from API response
+
+    // Minimal fake record if you want dry-run success:
+    // rows.push({ pollutant:"pm25", value:15, observed_at:new Date().toISOString(), country_code:"GB", region_code:"GB", source:"openaq" });
+
+    if (rows.length === 0) {
+      return json({ ok: true, inserted: 0, note: "No rows assembled (stub). Fill from EEA/OpenAQ." });
+    }
+
+    const { error } = await supabaseAdmin.from("aq_observation").insert(rows);
+    if (error) return json({ error: error.message }, { status: 400 });
+
+    return json({ ok: true, inserted: rows.length });
+  } catch (e) {
+    return json({ error: String(e) }, { status: 500 });
+  }
+});
+
+
+/supabase/functions/ingest_air_quality_hourly/function.json
+
+{ "verify_jwt": false }
+
+2.2 /supabase/functions/ingest_meteoalarm_hourly/index.ts
+// ingest_meteoalarm_hourly/index.ts
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import { supabaseAdmin, json } from "../_shared/supabaseClient.ts";
+
+type AlertRow = {
+  type: "heat";
+  source: "meteoalarm";
+  source_native_id?: string;
+  region_code?: string;
+  severity?: string;
+  properties?: unknown;
+  geom?: unknown;          // store WKT/WKB? For MVP you can omit and keep in properties
+  onset?: string;
+  expires?: string;
+};
+
+serve(async (_req) => {
+  try {
+    const METEOALARM_BASE_URL = Deno.env.get("METEOALARM_BASE_URL") ?? "";
+    const rows: AlertRow[] = [];
+
+    // TODO: Fetch EDR /items?phenomenon=Heat and map to rows.
+    // rows.push({ type:"heat", source:"meteoalarm", severity:"orange", region_code:"ES", onset:new Date().toISOString() });
+
+    if (rows.length === 0) return json({ ok: true, inserted: 0, note: "Stub. Map Meteoalarm EDR to rows." });
+
+    const { error } = await supabaseAdmin.from("alert_event").insert(rows);
+    if (error) return json({ error: error.message }, { status: 400 });
+
+    return json({ ok: true, inserted: rows.length });
+  } catch (e) {
+    return json({ error: String(e) }, { status: 500 });
+  }
+});
+
+
+/supabase/functions/ingest_meteoalarm_hourly/function.json
+
+{ "verify_jwt": false }
+
+2.3 /supabase/functions/ingest_ea_floods_hourly/index.ts
+// ingest_ea_floods_hourly/index.ts
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import { supabaseAdmin, json } from "../_shared/supabaseClient.ts";
+
+type AlertRow = {
+  type: "floods";
+  source: "ea";
+  source_native_id?: string;
+  region_code?: string;
+  severity?: string;
+  properties?: unknown;
+  geom?: unknown;
+  onset?: string;
+  expires?: string;
+};
+
+serve(async (_req) => {
+  try {
+    const EA_FLOODS_BASE_URL = Deno.env.get("EA_FLOODS_BASE_URL") ?? "";
+    const rows: AlertRow[] = [];
+
+    // TODO: Call EA Flood Monitoring endpoints; map flood areas -> rows with region_code="GB".
+    // rows.push({ type:"floods", source:"ea", severity:"warning", region_code:"GB", onset:new Date().toISOString() });
+
+    if (rows.length === 0) return json({ ok: true, inserted: 0, note: "Stub. Map EA Floods to rows." });
+
+    const { error } = await supabaseAdmin.from("alert_event").insert(rows);
+    if (error) return json({ error: error.message }, { status: 400 });
+
+    return json({ ok: true, inserted: rows.length });
+  } catch (e) {
+    return json({ error: String(e) }, { status: 500 });
+  }
+});
+
+
+/supabase/functions/ingest_ea_floods_hourly/function.json
+
+{ "verify_jwt": false }
+
+2.4 /supabase/functions/ingest_glofas_6h/index.ts
+// ingest_glofas_6h/index.ts
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import { supabaseAdmin, json } from "../_shared/supabaseClient.ts";
+
+type AlertRow = {
+  type: "floods";
+  source: "glofas";
+  source_native_id?: string;
+  region_code?: string;
+  severity?: string;   // e.g., "rp50" for >50-year
+  properties?: unknown;
+  geom?: unknown;
+  onset?: string;
+  expires?: string;
+};
+
+serve(async (_req) => {
+  try {
+    const GLOFAS_BASE_URL = Deno.env.get("GLOFAS_BASE_URL") ?? "";
+    const rows: AlertRow[] = [];
+
+    // TODO: Fetch exceedance probabilities by basin; map to region codes (country-level MVP).
+
+    if (rows.length === 0) return json({ ok: true, inserted: 0, note: "Stub. Map GloFAS to rows." });
+
+    const { error } = await supabaseAdmin.from("alert_event").insert(rows);
+    if (error) return json({ error: error.message }, { status: 400 });
+
+    return json({ ok: true, inserted: rows.length });
+  } catch (e) {
+    return json({ error: String(e) }, { status: 500 });
+  }
+});
+
+
+/supabase/functions/ingest_glofas_6h/function.json
+
+{ "verify_jwt": false }
+
+2.5 /supabase/functions/ingest_firms_3h/index.ts
+// ingest_firms_3h/index.ts
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import { supabaseAdmin, json } from "../_shared/supabaseClient.ts";
+
+type AlertRow = {
+  type: "wildfire";
+  source: "firms";
+  source_native_id?: string;
+  region_code?: string;  // map lat/lon to country (MVP)
+  severity?: string;     // e.g., "high_conf" from confidence
+  properties?: unknown;
+  geom?: unknown;        // optional: buffered footprint
+  onset?: string;
+  expires?: string;
+};
+
+serve(async (_req) => {
+  try {
+    const FIRMS_BASE_URL = Deno.env.get("FIRMS_BASE_URL") ?? "";
+    const FIRMS_MAP_KEY  = Deno.env.get("FIRMS_MAP_KEY") ?? "";
+    const rows: AlertRow[] = [];
+
+    // TODO: Fetch VIIRS/MODIS points within EU/UK bbox; buffer as polygons if desired and map country.
+
+    if (rows.length === 0) return json({ ok: true, inserted: 0, note: "Stub. Map FIRMS to rows." });
+
+    const { error } = await supabaseAdmin.from("alert_event").insert(rows);
+    if (error) return json({ error: error.message }, { status: 400 });
+
+    return json({ ok: true, inserted: rows.length });
+  } catch (e) {
+    return json({ error: String(e) }, { status: 500 });
+  }
+});
+
+
+/supabase/functions/ingest_firms_3h/function.json
+
+{ "verify_jwt": false }  
+
+3) Scorer Function
+/supabase/functions/compute_scores_daily/index.ts
+// compute_scores_daily/index.ts
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import { supabaseAdmin, json } from "../_shared/supabaseClient.ts";
+
+/**
+ * MVP scorer:
+ * - For each (type x region), compute windowed intensity/exposure/persistence from raw tables.
+ * - Normalize (very simply) by country max (MVP) — refine later to rolling 95th pct.
+ * - Insert into challenge_score_day (date=today UTC).
+ */
+
+type ScoreRow = {
+  type: "air_quality" | "heat" | "floods" | "wildfire";
+  region_code: string;
+  window_hours: number;
+  intensity: number;   // 0..1
+  exposure: number;    // 0..1
+  persistence: number; // 0..1
+  score: number;       // 0..100
+  freshness: "live" | "today" | "week" | "stale";
+  inputs_json: Record<string, unknown>;
+};
+
+function clamp01(n: number) { return Math.max(0, Math.min(1, n)); }
+function scoreFormula(i: number, e: number, p: number) {
+  return Math.round(100 * (0.6 * i + 0.3 * e + 0.1 * p));
+}
+
+serve(async (_req) => {
+  try {
+    const windows = JSON.parse(Deno.env.get("DEFAULT_WINDOWS") ?? '{"air_quality":168,"heat":24,"floods":48,"wildfire":72}');
+    const today = new Date().toISOString().slice(0,10);
+
+    // 1) Load enabled regions & domains
+    const { data: regions, error: rErr } = await supabaseAdmin.from("region").select("code,country_code,is_enabled").eq("is_enabled", true);
+    if (rErr) throw rErr;
+    const { data: domains, error: dErr } = await supabaseAdmin.from("domain_toggle").select("type,is_enabled");
+    if (dErr) throw dErr;
+    const enabledTypes = (domains ?? []).filter(x => x.is_enabled).map(x => x.type) as ScoreRow["type"][];
+
+    // Short-circuit if nothing
+    if (!regions?.length || !enabledTypes.length) return json({ ok: true, inserted: 0, note: "No regions or domains enabled" });
+
+    const rows: ScoreRow[] = [];
+
+    // 2) For each type, gather trivial metrics (MVP stubs: replace with real aggregations)
+    for (const type of enabledTypes) {
+      for (const r of regions) {
+        const window_hours = Number(windows[type]) || (type === "air_quality" ? 168 : 24);
+
+        // --- STUB METRICS (replace with SQL aggregations) ---
+        let intensity = 0.5;   // e.g., scaled severity or AQ exceedance fraction
+        let exposure  = 0.5;   // e.g., pop exposed / pop_total
+        let persistence = 0.5; // e.g., fraction of window above threshold
+
+        // Optionally look up region population to estimate "people"
+        let people = null as number | null;
+        const { data: popRow } = await supabaseAdmin.from("region_population").select("pop_total").eq("region_code", r.code).maybeSingle();
+        if (popRow?.pop_total) {
+          people = Math.round(popRow.pop_total * exposure);
+        }
+
+        intensity = clamp01(intensity);
+        exposure  = clamp01(exposure);
+        persistence = clamp01(persistence);
+
+        const score = scoreFormula(intensity, exposure, persistence);
+
+        // Freshness (MVP): daily scorer => "today"
+        const freshness: ScoreRow["freshness"] = "today";
+        rows.push({
+          type, region_code: r.code, window_hours, intensity, exposure, persistence,
+          score, freshness,
+          inputs_json: { window: `${window_hours}h`, people, notes: "MVP scorer stub – replace with real aggregates" }
+        });
+      }
+    }
+
+    // 3) Upsert by (type,region_code,date)
+    // We’ll insert rows; DB unique constraint ensures 1/day. Use upsert pattern with ON CONFLICT in RPC or do delete+insert.
+    let inserted = 0;
+    for (const chunk of chunked(rows, 500)) {
+      const payload = chunk.map(c => ({
+        type: c.type,
+        region_code: c.region_code,
+        date: today,
+        window_hours: c.window_hours,
+        intensity: c.intensity,
+        exposure: c.exposure,
+        persistence: c.persistence,
+        score: c.score,
+        freshness: c.freshness,
+        inputs_json: c.inputs_json,
+        as_of: new Date().toISOString()
+      }));
+      const { error } = await supabaseAdmin.from("challenge_score_day").insert(payload);
+      if (error) {
+        // If duplicate (already scored today), ignore; else fail
+        if (!String(error.message).toLowerCase().includes("duplicate key")) {
+          return json({ error: error.message }, { status: 400 });
+        }
+      } else {
+        inserted += payload.length;
+      }
+    }
+
+    return json({ ok: true, inserted, note: "Scorer ran (MVP stub). Replace metrics with real domain logic." });
+  } catch (e) {
+    return json({ error: String(e) }, { status: 500 });
+  }
+});
+
+function* chunked<T>(arr: T[], size = 500) {
+  for (let i = 0; i < arr.length; i += size) yield arr.slice(i, i + size);
+}
+
+
+/supabase/functions/compute_scores_daily/function.json
+
+{ "verify_jwt": false }
+
+4) Scheduling (set in Supabase)
+ingest_air_quality_hourly → 0 * * * *
+ingest_meteoalarm_hourly → 5 * * * *
+ingest_ea_floods_hourly → 10 * * * *
+ingest_firms_3h → 0 */3 * * *
+ingest_glofas_6h → 15 */6 * * *
+compute_scores_daily → 5 1 * * *
+(Or use Supabase “Scheduled Functions”.)
+
+5) Environment Variables (Functions)
+SUPABASE_URL=<your project url>
+SUPABASE_SERVICE_ROLE_KEY=<service role key>
+SUPABASE_ANON_KEY=<anon key for user verification>
+OPENAQ_BASE_URL=https://api.openaq.org/v3
+EEA_BASE_URL=<EEA AQ download service>
+METEOALARM_BASE_URL=<EDR base>
+EA_FLOODS_BASE_URL=<EA floods base>
+GLOFAS_BASE_URL=<GloFAS>
+FIRMS_BASE_URL=<FIRMS>
+FIRMS_MAP_KEY=<FIRMS key>
+EU_BBOX=<minX,minY,maxX,maxY>  # optional for FIRMS
+UK_BBOX=<minX,minY,maxX,maxY>  # optional for FIRMS
+DEFAULT_WINDOWS={"air_quality":168,"heat":24,"floods":48,"wildfire":72}
+AUTO_SCORING=true
