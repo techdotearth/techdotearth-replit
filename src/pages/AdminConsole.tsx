@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ArrowLeftIcon, AlertCircleIcon, CheckCircleIcon, XIcon } from 'lucide-react';
-import { getMockChallenges } from '../data/mockData';
+import { apiService, Challenge } from '../services/api';
 interface AdminConsoleProps {
   onBack: () => void;
 }
@@ -8,16 +8,80 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   onBack
 }) => {
   const [showSuccessToast, setShowSuccessToast] = useState(false);
-  const airQualityChallenges = getMockChallenges('air-quality');
-  const heatChallenges = getMockChallenges('heat');
-  const floodsChallenges = getMockChallenges('floods');
-  const wildfireChallenges = getMockChallenges('wildfire');
-  const allChallenges = [...airQualityChallenges, ...heatChallenges, ...floodsChallenges, ...wildfireChallenges];
-  const handleSaveOverride = () => {
-    setShowSuccessToast(true);
-    setTimeout(() => {
-      setShowSuccessToast(false);
-    }, 3000);
+  const [allChallenges, setAllChallenges] = useState<Challenge[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [overrideValues, setOverrideValues] = useState<Record<string, { score: string; note: string }>>({});
+
+  // Fetch all challenges when component mounts
+  useEffect(() => {
+    const fetchAllChallenges = async () => {
+      setLoading(true);
+      try {
+        console.log('🔄 Fetching all challenges for admin console');
+        const data = await apiService.getAllChallenges();
+        setAllChallenges(data);
+        console.log(`✅ Loaded ${data.length} challenges for admin console`);
+      } catch (error) {
+        console.error('❌ Failed to fetch challenges for admin console:', error);
+        setAllChallenges([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAllChallenges();
+  }, []);
+  const handleSaveOverride = async (challenge: Challenge) => {
+    const overrideData = overrideValues[challenge.id];
+    if (!overrideData?.score || !overrideData?.note) {
+      alert('Please enter both a score and a note for the override.');
+      return;
+    }
+
+    const score = parseInt(overrideData.score);
+    if (isNaN(score) || score < 0 || score > 100) {
+      alert('Please enter a valid score between 0 and 100.');
+      return;
+    }
+
+    try {
+      console.log(`🔄 Submitting override for ${challenge.type}/${challenge.countryCode}: ${score}`);
+      const success = await apiService.submitAdminOverride(challenge.type, challenge.countryCode, score, overrideData.note);
+      
+      if (success) {
+        setShowSuccessToast(true);
+        setTimeout(() => {
+          setShowSuccessToast(false);
+        }, 3000);
+        
+        // Clear the input values for this challenge
+        setOverrideValues(prev => ({
+          ...prev,
+          [challenge.id]: { score: '', note: '' }
+        }));
+        
+        // Refresh the challenges list
+        const data = await apiService.getAllChallenges();
+        setAllChallenges(data);
+        
+        console.log(`✅ Successfully submitted override for ${challenge.type}/${challenge.countryCode}`);
+      } else {
+        alert('Failed to save override. Please try again.');
+      }
+    } catch (error) {
+      console.error('❌ Failed to save override:', error);
+      alert('Failed to save override. Please try again.');
+    }
+  };
+
+  const updateOverrideValue = (challengeId: string, field: 'score' | 'note', value: string) => {
+    setOverrideValues(prev => ({
+      ...prev,
+      [challengeId]: {
+        ...prev[challengeId],
+        [field]: value
+      }
+    }));
   };
   return <div>
       <button onClick={onBack} className="inline-flex items-center text-te-primary dark:text-teal-400 hover:underline mb-6">
@@ -63,20 +127,47 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-te-border dark:divide-gray-700">
-              {allChallenges.slice(0, 5).map(challenge => <tr key={challenge.id}>
+              {loading ? (
+                <tr>
+                  <td colSpan={6} className="px-4 py-8 text-center text-te-ink-700 dark:text-gray-400">
+                    Loading challenges...
+                  </td>
+                </tr>
+              ) : allChallenges.slice(0, 10).map(challenge => <tr key={challenge.id}>
                   <td className="px-4 py-4 whitespace-nowrap">
                     <div className="flex items-center">
                       <span className="mr-2 text-lg" aria-hidden="true">
-                        {challenge.countryCode === 'GB' ? '🇬🇧' : challenge.countryCode === 'ES' ? '🇪🇸' : challenge.countryCode === 'FR' ? '🇫🇷' : '🏳️'}
+                        {challenge.countryCode === 'GB' ? '🇬🇧' : 
+                         challenge.countryCode === 'ES' ? '🇪🇸' : 
+                         challenge.countryCode === 'FR' ? '🇫🇷' : 
+                         challenge.countryCode === 'DE' ? '🇩🇪' : 
+                         challenge.countryCode === 'IT' ? '🇮🇹' : 
+                         challenge.countryCode === 'NL' ? '🇳🇱' : 
+                         challenge.countryCode === 'BE' ? '🇧🇪' : 
+                         challenge.countryCode === 'PT' ? '🇵🇹' : 
+                         challenge.countryCode === 'SE' ? '🇸🇪' : 
+                         challenge.countryCode === 'DK' ? '🇩🇰' : '🏳️'}
                       </span>
                       <span className="font-medium text-te-ink-900 dark:text-white">
                         {challenge.regionName}
                       </span>
+                      {challenge.hasOverride && (
+                        <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200">
+                          Override Active
+                        </span>
+                      )}
                     </div>
                   </td>
                   <td className="px-4 py-4 whitespace-nowrap">
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${challenge.type === 'air-quality' ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200' : challenge.type === 'heat' ? 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200' : challenge.type === 'floods' ? 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200' : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'}`}>
-                      {challenge.type === 'air-quality' ? 'Air Quality' : challenge.type === 'heat' ? 'Heat' : challenge.type === 'floods' ? 'Floods' : 'Wildfire'}
+                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                      challenge.type === 'air-quality' ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200' : 
+                      challenge.type === 'heat' ? 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200' : 
+                      challenge.type === 'floods' ? 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200' : 
+                      'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                    }`}>
+                      {challenge.type === 'air-quality' ? 'Air Quality' : 
+                       challenge.type === 'heat' ? 'Heat' : 
+                       challenge.type === 'floods' ? 'Floods' : 'Wildfire'}
                     </span>
                   </td>
                   <td className="px-4 py-4 whitespace-nowrap">
@@ -85,13 +176,29 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                     </span>
                   </td>
                   <td className="px-4 py-4 whitespace-nowrap">
-                    <input type="number" min="0" max="100" className="w-20 px-2 py-1 bg-white dark:bg-gray-800 border border-te-border dark:border-gray-700 rounded-md text-te-ink-900 dark:text-white" placeholder="Score" />
+                    <input 
+                      type="number" 
+                      min="0" 
+                      max="100" 
+                      value={overrideValues[challenge.id]?.score || ''}
+                      onChange={(e) => updateOverrideValue(challenge.id, 'score', e.target.value)}
+                      className="w-20 px-2 py-1 bg-white dark:bg-gray-800 border border-te-border dark:border-gray-700 rounded-md text-te-ink-900 dark:text-white" 
+                      placeholder="Score" 
+                    />
                   </td>
                   <td className="px-4 py-4 whitespace-nowrap">
-                    <input type="text" className="w-full px-2 py-1 bg-white dark:bg-gray-800 border border-te-border dark:border-gray-700 rounded-md text-te-ink-900 dark:text-white" placeholder="Reason for override" />
+                    <input 
+                      type="text" 
+                      value={overrideValues[challenge.id]?.note || ''}
+                      onChange={(e) => updateOverrideValue(challenge.id, 'note', e.target.value)}
+                      className="w-full px-2 py-1 bg-white dark:bg-gray-800 border border-te-border dark:border-gray-700 rounded-md text-te-ink-900 dark:text-white" 
+                      placeholder="Reason for override" 
+                    />
                   </td>
                   <td className="px-4 py-4 whitespace-nowrap">
-                    <button onClick={handleSaveOverride} className="px-3 py-1 bg-te-primary dark:bg-teal-600 text-white rounded-md text-sm hover:bg-teal-700 dark:hover:bg-teal-500 transition-colors">
+                    <button 
+                      onClick={() => handleSaveOverride(challenge)} 
+                      className="px-3 py-1 bg-te-primary dark:bg-teal-600 text-white rounded-md text-sm hover:bg-teal-700 dark:hover:bg-teal-500 transition-colors">
                       Save
                     </button>
                   </td>
