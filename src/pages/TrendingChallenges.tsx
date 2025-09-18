@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { LeaderboardTable } from '../components/LeaderboardTable';
 import { ChallengeType } from '../App';
-import { getMockChallenges } from '../data/mockData';
+import { apiService, Challenge } from '../services/api';
 interface TrendingChallengesProps {
   activeTab: ChallengeType;
   onSelectChallenge: (id: string) => void;
@@ -10,10 +10,32 @@ export const TrendingChallenges: React.FC<TrendingChallengesProps> = ({
   activeTab,
   onSelectChallenge
 }) => {
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [challenges, setChallenges] = useState<Challenge[]>([]);
   const [sortBy, setSortBy] = useState<string>('score');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
-  const challenges = getMockChallenges(activeTab);
+  const [lastUpdated, setLastUpdated] = useState<string>('');
+
+  // Fetch challenges when component mounts or activeTab changes
+  useEffect(() => {
+    const fetchChallenges = async () => {
+      setLoading(true);
+      try {
+        console.log(`🔄 Fetching challenges for ${activeTab}`);
+        const data = await apiService.getChallenges(activeTab);
+        setChallenges(data);
+        setLastUpdated(new Date().toISOString());
+        console.log(`✅ Loaded ${data.length} challenges for ${activeTab}`);
+      } catch (error) {
+        console.error('❌ Failed to fetch challenges:', error);
+        setChallenges([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchChallenges();
+  }, [activeTab]);
   const handleSort = (column: string) => {
     if (sortBy === column) {
       setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
@@ -33,7 +55,9 @@ export const TrendingChallenges: React.FC<TrendingChallengesProps> = ({
         </p>
         <p className="text-sm text-te-ink-700 dark:text-gray-400">
           Last updated:{' '}
-          <time dateTime="2023-06-15T13:45:00Z">June 15, 2023 13:45 BST</time>
+          <time dateTime={lastUpdated}>
+            {lastUpdated ? new Date(lastUpdated).toLocaleString() : 'Loading...'}
+          </time>
         </p>
       </div>
       <LeaderboardTable challenges={challenges} loading={loading} sortBy={sortBy} sortDir={sortDir} onSort={handleSort} onSelectChallenge={onSelectChallenge} challengeType={activeTab} />

@@ -33,19 +33,23 @@ export interface Challenge {
 }
 
 // Backend API response interfaces
-interface LeaderboardResponse {
-  challenges: Array<{
-    type: string;
-    region_code: string;
-    region_name: string;
-    score: number;
-    intensity: number;
-    freshness: string;
-    updated_at: string;
-    sources: string[];
-    has_override: boolean;
-  }>;
+interface LeaderboardItem {
+  type: string;
+  region_code: string;
+  region_name: string;
+  country_code: string;
+  audience: string;
+  display_score: string;
+  intensity: string;
+  exposure?: string;
+  persistence?: string;
+  freshness: string;
+  inputs_json: any;
+  as_of: string;
+  override_note?: string;
 }
+
+type LeaderboardResponse = LeaderboardItem[];
 
 interface ChallengeDetailResponse {
   type: string;
@@ -89,7 +93,7 @@ class ApiService {
   }
 
   // Convert backend leaderboard response to frontend Challenge format
-  private convertToChallenge(item: LeaderboardResponse['challenges'][0], rank: number): Challenge {
+  private convertToChallenge(item: LeaderboardItem, rank: number): Challenge {
     // Map backend challenge types to frontend types
     const typeMap: Record<string, ChallengeType> = {
       'air_quality': 'air-quality',
@@ -99,28 +103,38 @@ class ApiService {
     };
 
     const type = typeMap[item.type] || item.type as ChallengeType;
+    const score = parseInt(item.display_score);
+    const intensity = parseFloat(item.intensity);
     
-    // Estimate people exposed based on region and intensity
-    const peopleExposed = Math.floor(item.intensity * 10000000 * (Math.random() * 0.5 + 0.75));
+    // Extract people exposed from inputs_json or estimate
+    const peopleExposed = item.inputs_json?.people || Math.floor(intensity * 10000000 * (Math.random() * 0.5 + 0.75));
     
     // Determine exposure trend based on intensity
     const exposureTrend: 'up' | 'down' | 'flat' = 
-      item.intensity > 0.7 ? 'up' : 
-      item.intensity < 0.3 ? 'down' : 'flat';
+      intensity > 0.7 ? 'up' : 
+      intensity < 0.3 ? 'down' : 'flat';
+
+    // Map sources based on challenge type
+    const sourceMap: Record<ChallengeType, Challenge['sources']> = {
+      'air-quality': ['EEA', 'GHSL'],
+      'heat': ['Meteoalarm', 'GHSL'],
+      'floods': ['EA', 'GloFAS', 'GHSL'],
+      'wildfire': ['FIRMS', 'GHSL']
+    };
 
     return {
       id: `${type}-${item.region_code}`,
       type,
       regionName: item.region_name,
-      countryCode: item.region_code,
-      score: item.score,
+      countryCode: item.country_code,
+      score,
       freshness: item.freshness as Challenge['freshness'],
-      intensity: item.intensity,
+      intensity,
       peopleExposed,
       exposureTrend,
-      updatedIso: item.updated_at,
-      sources: item.sources as Challenge['sources'],
-      hasOverride: item.has_override,
+      updatedIso: item.as_of,
+      sources: sourceMap[type],
+      hasOverride: !!item.override_note,
       rank
     };
   }
@@ -138,7 +152,7 @@ class ApiService {
       const backendType = typeMap[type];
       const response = await this.fetchApi<LeaderboardResponse>(`/api/leaderboard?type=${backendType}`);
       
-      return response.challenges
+      return response
         .filter(item => item.type === backendType)
         .map((item, index) => this.convertToChallenge(item, index + 1))
         .sort((a, b) => b.score - a.score);
