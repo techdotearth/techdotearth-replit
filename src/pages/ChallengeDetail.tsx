@@ -1,10 +1,10 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { ArrowLeftIcon, AlertTriangleIcon, UserIcon, LeafIcon } from 'lucide-react';
 import { MiniMapPanel } from '../components/MiniMapPanel';
 import { TrendSparkCard } from '../components/TrendSparkCard';
 import { AdminNoteInline } from '../components/AdminNoteInline';
 import { ChallengeType } from '../App';
-import { getChallengeById } from '../data/mockData';
+import { apiService, Challenge } from '../services/api';
 interface ChallengeDetailProps {
   challengeId: string;
   challengeType: ChallengeType;
@@ -15,7 +15,38 @@ export const ChallengeDetail: React.FC<ChallengeDetailProps> = ({
   challengeType,
   onBack
 }) => {
-  const challenge = getChallengeById(challengeId, challengeType);
+  const [challenge, setChallenge] = useState<Challenge | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // Extract region code from challengeId (format: "type-regionCode")
+  const regionCode = challengeId.split('-')[1] || challengeId;
+
+  useEffect(() => {
+    const fetchChallengeDetail = async () => {
+      setLoading(true);
+      try {
+        console.log(`🔄 Fetching challenge detail for ${challengeType}/${regionCode}`);
+        const data = await apiService.getChallengeDetail(challengeType, regionCode);
+        setChallenge(data);
+        console.log(`✅ Loaded challenge detail:`, data);
+      } catch (error) {
+        console.error('❌ Failed to fetch challenge detail:', error);
+        setChallenge(null);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchChallengeDetail();
+  }, [challengeType, regionCode]);
+
+  if (loading) {
+    return <div className="text-center py-12">
+        <h2 className="text-xl font-semibold text-te-ink-900 dark:text-white mb-2">
+          Loading challenge details...
+        </h2>
+      </div>;
+  }
   if (!challenge) {
     return <div className="text-center py-12">
         <h2 className="text-xl font-semibold text-te-ink-900 dark:text-white mb-2">
