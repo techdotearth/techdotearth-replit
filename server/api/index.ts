@@ -362,6 +362,32 @@ app.post('/api/compute-scores', asyncHandler(async (req: express.Request, res: e
   });
 }));
 
+// ===== MANUAL INGESTION TRIGGER (for testing) =====
+app.post('/api/admin/trigger-air-quality-ingestion', requireAuth, asyncHandler(async (req: express.Request, res: express.Response) => {
+  try {
+    console.log('🔧 Manual air quality ingestion triggered by admin');
+    
+    // Import the CronScheduler class
+    const { CronScheduler } = await import('../services/cron-scheduler.js');
+    const scheduler = new CronScheduler();
+    
+    // Trigger ingestion manually
+    await scheduler.triggerAirQualityIngestion();
+    
+    res.json({ 
+      ok: true, 
+      message: 'Air quality ingestion completed successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error('❌ Manual ingestion failed:', error.message);
+    res.status(500).json({ 
+      error: 'Ingestion failed', 
+      message: error.message 
+    });
+  }
+}));
+
 // Error handling middleware
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error('API Error:', err);
