@@ -187,12 +187,12 @@ export const ChallengeDetail: React.FC<ChallengeDetailProps> = ({
                         Intensity
                       </span>
                       <span className="text-sm font-medium text-te-ink-900 dark:text-white">
-                        0.72
+                        {challenge.intensity?.toFixed(2) || 'N/A'}
                       </span>
                     </div>
                     <div className="h-2 bg-te-muted dark:bg-gray-700 rounded-full overflow-hidden">
                       <div className="h-full bg-te-primary dark:bg-teal-500" style={{
-                      width: '72%'
+                      width: `${Math.round((challenge.intensity || 0) * 100)}%`
                     }}></div>
                     </div>
                   </div>
@@ -202,12 +202,12 @@ export const ChallengeDetail: React.FC<ChallengeDetailProps> = ({
                         Exposure
                       </span>
                       <span className="text-sm font-medium text-te-ink-900 dark:text-white">
-                        0.85
+                        {challenge.exposure?.toFixed(2) || 'N/A'}
                       </span>
                     </div>
                     <div className="h-2 bg-te-muted dark:bg-gray-700 rounded-full overflow-hidden">
                       <div className="h-full bg-te-primary dark:bg-teal-500" style={{
-                      width: '85%'
+                      width: `${Math.round((challenge.exposure || 0) * 100)}%`
                     }}></div>
                     </div>
                   </div>
@@ -217,19 +217,19 @@ export const ChallengeDetail: React.FC<ChallengeDetailProps> = ({
                         Persistence
                       </span>
                       <span className="text-sm font-medium text-te-ink-900 dark:text-white">
-                        0.68
+                        {challenge.persistence?.toFixed(2) || 'N/A'}
                       </span>
                     </div>
                     <div className="h-2 bg-te-muted dark:bg-gray-700 rounded-full overflow-hidden">
                       <div className="h-full bg-te-primary dark:bg-teal-500" style={{
-                      width: '68%'
+                      width: `${Math.round((challenge.persistence || 0) * 100)}%`
                     }}></div>
                     </div>
                   </div>
                 </div>
               </div>
               <TrendSparkCard challengeType={challengeType} />
-              {challenge.hasOverride && <AdminNoteInline overrideValue={challenge.score} note="Manual override due to sensor malfunction in northern region." />}
+              {challenge.hasOverride && challenge.overrideNote && <AdminNoteInline overrideValue={challenge.score} note={challenge.overrideNote} />}
             </div>
           </div>
         </div>

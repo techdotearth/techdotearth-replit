@@ -20,15 +20,19 @@ export interface Challenge {
   id: string;
   type: ChallengeType;
   regionName: string;
-  countryCode: string;
+  regionCode: string;  // Backend region identifier
+  countryCode: string; // Backend country identifier
   score: number;
   freshness: 'live' | 'today' | 'week' | 'stale';
   intensity: number;
+  exposure?: number;
+  persistence?: number;
   peopleExposed: number;
   exposureTrend: 'up' | 'down' | 'flat';
   updatedIso: string;
   sources: ('EEA' | 'Meteoalarm' | 'EA' | 'GloFAS' | 'FIRMS' | 'GHSL')[];
   hasOverride: boolean;
+  overrideNote?: string;
   rank?: number;
 }
 
@@ -55,15 +59,16 @@ interface ChallengeDetailResponse {
   type: string;
   region_code: string;
   region_name: string;
-  score: number;
+  country_code: string;
+  audience: string;
+  display_score: number;
   intensity: number;
   exposure: number;
   persistence: number;
   freshness: string;
-  updated_at: string;
-  sources: string[];
-  has_override: boolean;
-  notes: string;
+  inputs_json: any;
+  as_of: string;
+  override_note?: string;
 }
 
 class ApiService {
@@ -105,16 +110,18 @@ class ApiService {
     const type = typeMap[item.type] || item.type as ChallengeType;
     const score = parseInt(item.display_score);
     const intensity = parseFloat(item.intensity);
+    const exposure = item.exposure ? parseFloat(item.exposure) : undefined;
+    const persistence = item.persistence ? parseFloat(item.persistence) : undefined;
     
-    // Extract people exposed from inputs_json or estimate
-    const peopleExposed = item.inputs_json?.people || Math.floor(intensity * 10000000 * (Math.random() * 0.5 + 0.75));
+    // Use actual people exposed from backend, fallback to 0 if not available
+    const peopleExposed = item.inputs_json?.people || 0;
     
     // Determine exposure trend based on intensity
     const exposureTrend: 'up' | 'down' | 'flat' = 
       intensity > 0.7 ? 'up' : 
       intensity < 0.3 ? 'down' : 'flat';
 
-    // Map sources based on challenge type
+    // Map sources based on challenge type (use backend sources when available)
     const sourceMap: Record<ChallengeType, Challenge['sources']> = {
       'air-quality': ['EEA', 'GHSL'],
       'heat': ['Meteoalarm', 'GHSL'],
@@ -126,15 +133,19 @@ class ApiService {
       id: `${type}-${item.region_code}`,
       type,
       regionName: item.region_name,
+      regionCode: item.region_code,
       countryCode: item.country_code,
       score,
       freshness: item.freshness as Challenge['freshness'],
       intensity,
+      exposure,
+      persistence,
       peopleExposed,
       exposureTrend,
       updatedIso: item.as_of,
       sources: sourceMap[type],
       hasOverride: !!item.override_note,
+      overrideNote: item.override_note || undefined,
       rank
     };
   }
@@ -176,24 +187,37 @@ class ApiService {
       const backendType = typeMap[type];
       const response = await this.fetchApi<ChallengeDetailResponse>(`/api/challenge/${backendType}/${regionCode}`);
       
-      const peopleExposed = Math.floor(response.exposure * 10000000 * (Math.random() * 0.5 + 0.75));
+      // Use actual people exposed from backend, fallback to 0 if not available
+      const peopleExposed = response.inputs_json?.people || 0;
       const exposureTrend: 'up' | 'down' | 'flat' = 
         response.intensity > 0.7 ? 'up' : 
         response.intensity < 0.3 ? 'down' : 'flat';
+
+      // Map sources based on challenge type
+      const sourceMap: Record<ChallengeType, Challenge['sources']> = {
+        'air-quality': ['EEA', 'GHSL'],
+        'heat': ['Meteoalarm', 'GHSL'],
+        'floods': ['EA', 'GloFAS', 'GHSL'],
+        'wildfire': ['FIRMS', 'GHSL']
+      };
 
       return {
         id: `${type}-${regionCode}`,
         type,
         regionName: response.region_name,
-        countryCode: regionCode,
-        score: response.score,
+        regionCode: response.region_code,
+        countryCode: response.country_code,
+        score: response.display_score,
         freshness: response.freshness as Challenge['freshness'],
         intensity: response.intensity,
+        exposure: response.exposure,
+        persistence: response.persistence,
         peopleExposed,
         exposureTrend,
-        updatedIso: response.updated_at,
-        sources: response.sources as Challenge['sources'],
-        hasOverride: response.has_override
+        updatedIso: response.as_of,
+        sources: sourceMap[type],
+        hasOverride: !!response.override_note,
+        overrideNote: response.override_note
       };
     } catch (error) {
       console.error(`❌ Failed to fetch challenge detail for ${type}/${regionCode}:`, error);
@@ -214,7 +238,7 @@ class ApiService {
       await this.fetchApi('/api/admin/override', {
         method: 'POST',
         headers: {
-          'Authorization': 'Bearer admin-token', // In production, use proper auth
+          'Authorization': 'Bearer admin-token', // TODO: Use proper auth in production
         },
         body: JSON.stringify({
           type: typeMap[type],

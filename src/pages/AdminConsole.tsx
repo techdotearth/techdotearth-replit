@@ -45,8 +45,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
     }
 
     try {
-      console.log(`🔄 Submitting override for ${challenge.type}/${challenge.countryCode}: ${score}`);
-      const success = await apiService.submitAdminOverride(challenge.type, challenge.countryCode, score, overrideData.note);
+      console.log(`🔄 Submitting override for ${challenge.type}/${challenge.regionCode}: ${score}`);
+      const success = await apiService.submitAdminOverride(challenge.type, challenge.regionCode, score, overrideData.note);
       
       if (success) {
         setShowSuccessToast(true);
@@ -64,7 +64,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
         const data = await apiService.getAllChallenges();
         setAllChallenges(data);
         
-        console.log(`✅ Successfully submitted override for ${challenge.type}/${challenge.countryCode}`);
+        console.log(`✅ Successfully submitted override for ${challenge.type}/${challenge.regionCode}`);
       } else {
         alert('Failed to save override. Please try again.');
       }
