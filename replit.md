@@ -9,7 +9,25 @@ This is a React + TypeScript application built with Vite, using TailwindCSS for 
 - ✅ TypeScript compilation working
 - ✅ Deployment configuration set up
 
-## Recent Changes (September 17, 2025)
+## Recent Changes (September 22, 2025)
+
+### Air Quality Data Ingestion System
+1. **Complete Ingestion Pipeline:**
+   - ✅ EEA and OpenAQ API clients with fallback logic
+   - ✅ Hourly cron scheduler (0 * * * *) with manual trigger endpoint
+   - ✅ OpenAQ v2 → v3 API migration with proper authentication
+   - ✅ Data deduplication, UTC normalization, and persistence mechanisms
+   - ✅ End-to-end testing with comprehensive error handling
+
+2. **OpenAQ Rate Limiting Solution (NEW):**
+   - ✅ **Intelligent rate limiter** respecting 60/min and 2000/hour limits
+   - ✅ **Bulk API optimization** - reduced from hundreds to ~3-5 API calls
+   - ✅ **429 error handling** with automatic retry and wait logic
+   - ✅ **Production-ready batching** with conservative limits and monitoring
+   - ✅ **Fallback strategy** for individual sensor requests when needed
+   - ⚠️ **Requires OPENAQ_API_KEY** environment variable for operation
+
+## Previous Changes (September 17, 2025)
 1. **Replit Environment Setup:**
    - Updated `vite.config.ts` to bind to `0.0.0.0:5000` with proper HMR configuration
    - Fixed React DOM render API (migrated from legacy `render` to `createRoot`)
