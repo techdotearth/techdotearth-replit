@@ -3,16 +3,16 @@ import { OpenAQClient } from './openaq-client.js';
 import { storage } from '../storage.js';
 
 interface AQObservation {
-  station_id: string;
+  stationId: string;
   pollutant: string;
   value: number;
   unit: string;
-  aqi_band: string;
-  observed_at: string;
+  aqiBand: string;
+  observedAt: Date;
   lat?: number;
   lon?: number;
-  country_code: string;
-  region_code: string;
+  countryCode: string;
+  regionCode: string;
   source: string;
   raw: any;
 }
@@ -89,7 +89,7 @@ export class AirQualityIngestionService {
   }
 
   /**
-   * Remove duplicate observations based on station_id, pollutant, and observed_at
+   * Remove duplicate observations based on stationId, pollutant, and observedAt
    */
   private deduplicateObservations(observations: AQObservation[]): AQObservation[] {
     const seen = new Set<string>();
@@ -97,7 +97,7 @@ export class AirQualityIngestionService {
 
     for (const obs of observations) {
       // Create deduplication key
-      const key = `${obs.station_id}|${obs.pollutant}|${obs.observed_at}`;
+      const key = `${obs.stationId}|${obs.pollutant}|${obs.observedAt.toISOString()}`;
       
       if (!seen.has(key)) {
         seen.add(key);
@@ -120,17 +120,16 @@ export class AirQualityIngestionService {
 
     for (const obs of observations) {
       try {
-        // Ensure UTC timestamp
-        const observedDate = new Date(obs.observed_at);
-        if (isNaN(observedDate.getTime())) {
-          console.warn(`⚠️ Invalid timestamp for observation: ${obs.observed_at}`);
+        // Validate observedAt is already a Date
+        if (!(obs.observedAt instanceof Date) || isNaN(obs.observedAt.getTime())) {
+          console.warn(`⚠️ Invalid timestamp for observation:`, obs.observedAt);
           continue;
         }
 
         // Validate required fields
-        if (!obs.station_id || !obs.pollutant || typeof obs.value !== 'number') {
+        if (!obs.stationId || !obs.pollutant || typeof obs.value !== 'number') {
           console.warn(`⚠️ Missing required fields in observation:`, {
-            station_id: obs.station_id,
+            stationId: obs.stationId,
             pollutant: obs.pollutant,
             value: obs.value
           });
@@ -138,12 +137,11 @@ export class AirQualityIngestionService {
         }
 
         // Ensure region mapping (MVP: country-level only)
-        const regionCode = this.mapStationToRegion(obs.station_id, obs.country_code);
+        const regionCode = this.mapStationToRegion(obs.stationId, obs.countryCode);
 
         normalized.push({
           ...obs,
-          observed_at: observedDate.toISOString(), // Ensure UTC ISO format
-          region_code: regionCode,
+          regionCode: regionCode,
           value: Math.round(obs.value * 1000) / 1000 // Round to 3 decimal places
         });
 
@@ -173,24 +171,25 @@ export class AirQualityIngestionService {
     try {
       console.log(`💾 Persisting ${observations.length} observations to database...`);
       
-      // Convert observations to database format
-      const dbObservations = observations.map(obs => ({
-        station_id: obs.station_id,
-        pollutant: obs.pollutant,
-        value: obs.value,
-        unit: obs.unit,
-        aqi_band: obs.aqi_band as 'good' | 'moderate' | 'unhealthy',
-        observed_at: new Date(obs.observed_at),
-        lat: obs.lat,
-        lon: obs.lon,
-        country_code: obs.country_code,
-        region_code: obs.region_code,
-        source: obs.source,
-        raw: obs.raw
-      }));
+      // Add runtime assertions before insert
+      if (observations.length > 0) {
+        const sample = observations[0];
+        console.log(`📊 Sample observation keys:`, Object.keys(sample));
+        console.log(`📊 Sample observation:`, {
+          stationId: sample.stationId,
+          pollutant: sample.pollutant,
+          observedAt: sample.observedAt,
+          aqiBand: sample.aqiBand
+        });
+        
+        // Assert required fields are present
+        if (!sample.stationId || !sample.pollutant || !(sample.observedAt instanceof Date)) {
+          throw new Error(`Invalid observation format: missing required fields`);
+        }
+      }
 
-      // Insert observations into database
-      const result = await storage.insertAirQualityObservations(dbObservations);
+      // Pass observations directly as InsertAqObservation[] - no mapping needed
+      const result = await storage.insertAirQualityObservations(observations);
       console.log(`✅ Successfully persisted ${result.inserted} observations`);
 
     } catch (error: any) {
