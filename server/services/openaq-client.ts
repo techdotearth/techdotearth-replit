@@ -225,7 +225,7 @@ export class OpenAQClient {
   }
 
   /**
-   * Get recent hourly measurements from locations using optimized batch approach
+   * Get recent hourly measurements from locations using sensors API
    */
   private async getRecentMeasurements(locations: OpenAQLocation[]): Promise<OpenAQMeasurement[]> {
     const measurements: OpenAQMeasurement[] = [];
@@ -234,81 +234,9 @@ export class OpenAQClient {
 
     console.log(`📊 Fetching measurements from ${locations.length} locations with rate limiting...`);
 
-    // Strategy: Use bulk measurements endpoint to reduce API calls
-    // Instead of individual sensor calls, try location-based batched requests
-    const maxLocationsPerRequest = 50; // Conservative batch size to stay within rate limits
-    
-    for (let i = 0; i < locations.length; i += maxLocationsPerRequest) {
-      const locationBatch = locations.slice(i, i + maxLocationsPerRequest);
-      const locationIds = locationBatch.map(loc => loc.id);
-
-      try {
-        console.log(`📡 Fetching measurements for batch ${Math.floor(i/maxLocationsPerRequest) + 1}/${Math.ceil(locations.length/maxLocationsPerRequest)} (${locationBatch.length} locations)`);
-        
-        // Use bulk measurements endpoint if available, otherwise fall back to individual calls
-        const response = await this.makeRateLimitedRequest<OpenAQResponse<OpenAQMeasurement>>(
-          `${this.baseUrl}/measurements`,
-          {
-            locations_id: locationIds.join(','),
-            parameters_id: '2,7', // PM2.5 and NO2
-            date_from: twoHoursAgo.toISOString(),
-            date_to: now.toISOString(),
-            limit: 10000, // Get as many as possible in one call
-            sort: 'desc'
-          }
-        );
-
-        const validMeasurements = response.results.filter(m => 
-          m.value !== null && m.value !== undefined && m.value >= 0
-        );
-
-        // Enrich measurements with location data
-        const enrichedMeasurements = validMeasurements.map(measurement => {
-          const location = locationBatch.find(loc => loc.id === (measurement as any).location?.id);
-          return {
-            ...measurement,
-            coordinates: location?.coordinates || measurement.coordinates,
-            locationId: location?.id || (measurement as any).location?.id,
-            countryCode: location?.country?.code || 'UNKNOWN'
-          } as any;
-        });
-
-        measurements.push(...enrichedMeasurements);
-        console.log(`✅ Retrieved ${enrichedMeasurements.length} measurements from batch`);
-
-      } catch (bulkError: any) {
-        // If bulk request fails, fall back to individual sensor requests with heavy rate limiting
-        console.warn(`⚠️ Bulk request failed, falling back to individual sensor requests: ${bulkError.message}`);
-        
-        const fallbackMeasurements = await this.getFallbackMeasurements(locationBatch, twoHoursAgo, now);
-        measurements.push(...fallbackMeasurements);
-      }
-
-      // Add extra delay between batches to be respectful to rate limits
-      if (i + maxLocationsPerRequest < locations.length) {
-        const delay = 2000; // 2 second delay between batches
-        console.log(`⏳ Waiting ${delay/1000}s before next batch...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-    }
-
-    console.log(`✅ Total measurements retrieved: ${measurements.length}`);
-    return measurements;
-  }
-
-  /**
-   * Fallback method for individual sensor requests with strict rate limiting
-   */
-  private async getFallbackMeasurements(
-    locations: OpenAQLocation[], 
-    dateFrom: Date, 
-    dateTo: Date
-  ): Promise<OpenAQMeasurement[]> {
-    const measurements: OpenAQMeasurement[] = [];
-    
     // Limit to first 20 locations to avoid rate limit issues
     const limitedLocations = locations.slice(0, 20);
-    console.log(`⚠️ Using fallback mode for ${limitedLocations.length} locations (limited to avoid rate limits)`);
+    console.log(`📍 Processing ${limitedLocations.length} locations (limited to avoid rate limits)`);
 
     for (const location of limitedLocations) {
       const relevantSensors = location.sensors.filter(sensor => 
@@ -322,8 +250,8 @@ export class OpenAQClient {
           const response = await this.makeRateLimitedRequest<OpenAQResponse<OpenAQMeasurement>>(
             `${this.baseUrl}/sensors/${sensor.id}/hours`,
             {
-              date_from: dateFrom.toISOString(),
-              date_to: dateTo.toISOString(),
+              date_from: twoHoursAgo.toISOString(),
+              date_to: now.toISOString(),
               limit: 100
             }
           );
@@ -341,9 +269,9 @@ export class OpenAQClient {
 
           // Rate limit status check
           const status = this.rateLimiter.getStatus();
-          if (status.minuteUsage.remaining < 10) {
-            console.log(`⚠️ Rate limit approaching (${status.minuteUsage.remaining} requests remaining), stopping fallback`);
-            break;
+          if (status.minuteUsage.remaining < 5) {
+            console.log(`⚠️ Rate limit approaching (${status.minuteUsage.remaining} requests remaining), stopping collection`);
+            return measurements;
           }
 
         } catch (sensorError: any) {
@@ -352,6 +280,7 @@ export class OpenAQClient {
       }
     }
 
+    console.log(`✅ Total measurements retrieved: ${measurements.length}`);
     return measurements;
   }
 
