@@ -285,6 +285,38 @@ export class OpenAQClient {
   }
 
   /**
+   * Parse date from OpenAQ measurement data
+   */
+  private parseOpenAQDate(measurement: any): string {
+    try {
+      // Try different possible date fields in OpenAQ v3 response
+      const dateValue = measurement.period?.datetime_from?.utc ||
+                       measurement.period?.datetime_from ||
+                       measurement.datetime_from?.utc ||
+                       measurement.datetime_from ||
+                       measurement.date?.utc ||
+                       measurement.date ||
+                       measurement.timestamp;
+
+      if (!dateValue) {
+        console.warn('⚠️ No date field found in measurement:', Object.keys(measurement));
+        return new Date().toISOString(); // Fallback to current time
+      }
+
+      const parsedDate = new Date(dateValue);
+      if (isNaN(parsedDate.getTime())) {
+        console.warn('⚠️ Invalid date format:', dateValue);
+        return new Date().toISOString(); // Fallback to current time
+      }
+
+      return parsedDate.toISOString();
+    } catch (error) {
+      console.warn('⚠️ Date parsing error:', error);
+      return new Date().toISOString(); // Fallback to current time
+    }
+  }
+
+  /**
    * Convert OpenAQ v3 data format to standardized observation format
    */
   convertToObservations(measurements: OpenAQMeasurement[]): any[] {
@@ -309,7 +341,7 @@ export class OpenAQClient {
         value: measurement.value,
         unit: measurement.parameter.units,
         aqi_band: aqiBand,
-        observed_at: new Date(measurement.period.datetime_from.utc).toISOString(),
+        observed_at: this.parseOpenAQDate(measurement),
         lat: measurement.coordinates?.latitude || null,
         lon: measurement.coordinates?.longitude || null,
         country_code: countryCode,

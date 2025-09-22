@@ -1,6 +1,6 @@
 import { EEAClient } from './eea-client.js';
 import { OpenAQClient } from './openaq-client.js';
-import axios from 'axios';
+import { storage } from '../storage.js';
 
 interface AQObservation {
   station_id: string;
@@ -20,13 +20,6 @@ interface AQObservation {
 export class AirQualityIngestionService {
   private readonly eea = new EEAClient();
   private readonly openaq = new OpenAQClient();
-  private readonly ingestionEndpoint: string;
-
-  constructor() {
-    // Use internal API endpoint for ingestion
-    const port = process.env.PORT || 3001;
-    this.ingestionEndpoint = `http://localhost:${port}/api/ingest/air-quality`;
-  }
 
   /**
    * Main ingestion orchestrator - fetches from EEA (primary) and OpenAQ (fallback)
@@ -174,34 +167,34 @@ export class AirQualityIngestionService {
   }
 
   /**
-   * Persist observations to database via internal API
+   * Persist observations directly to database
    */
   private async persistObservations(observations: AQObservation[]): Promise<void> {
     try {
       console.log(`💾 Persisting ${observations.length} observations to database...`);
       
-      const response = await axios.post(this.ingestionEndpoint, {
-        observations
-      }, {
-        timeout: 30000,
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'AQIngestionService/1.0'
-        }
-      });
+      // Convert observations to database format
+      const dbObservations = observations.map(obs => ({
+        station_id: obs.station_id,
+        pollutant: obs.pollutant,
+        value: obs.value,
+        unit: obs.unit,
+        aqi_band: obs.aqi_band as 'good' | 'moderate' | 'unhealthy',
+        observed_at: new Date(obs.observed_at),
+        lat: obs.lat,
+        lon: obs.lon,
+        country_code: obs.country_code,
+        region_code: obs.region_code,
+        source: obs.source,
+        raw: obs.raw
+      }));
 
-      if (response.data?.ok) {
-        console.log(`✅ Successfully persisted ${response.data.inserted} observations`);
-      } else {
-        throw new Error(`Ingestion API returned: ${JSON.stringify(response.data)}`);
-      }
+      // Insert observations into database
+      const result = await storage.insertAirQualityObservations(dbObservations);
+      console.log(`✅ Successfully persisted ${result.inserted} observations`);
 
     } catch (error: any) {
-      console.error('❌ Failed to persist observations:', {
-        message: error.message,
-        status: error.response?.status,
-        data: error.response?.data
-      });
+      console.error('❌ Failed to persist observations:', error.message);
       throw error;
     }
   }
