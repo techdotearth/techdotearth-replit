@@ -1,97 +1,120 @@
 import axios from 'axios';
 
-interface OpenAQMeasurement {
-  locationId: number;
-  location: string;
-  parameter: string;
-  value: number;
-  unit: string;
-  country: string;
-  city: string;
-  isMobile: boolean;
-  isAnalysis: boolean;
-  entity: string;
-  sensorType: string;
-  date: {
-    utc: string;
-    local: string;
+interface OpenAQCountry {
+  id: number;
+  code: string;
+  name: string;
+}
+
+interface OpenAQLocation {
+  id: number;
+  name: string;
+  country: {
+    id: number;
+    code: string;
+    name: string;
   };
   coordinates: {
     latitude: number;
     longitude: number;
   };
+  sensors: Array<{
+    id: number;
+    parameter: {
+      id: number;
+      name: string;
+      units: string;
+    };
+  }>;
 }
 
-interface OpenAQResponse {
+interface OpenAQMeasurement {
+  value: number;
+  parameter: {
+    id: number;
+    name: string;
+    units: string;
+  };
+  period: {
+    datetime_from: {
+      utc: string;
+      local: string;
+    };
+    datetime_to: {
+      utc: string;
+      local: string;
+    };
+  };
+  coordinates: {
+    latitude: number;
+    longitude: number;
+  };
+  summary?: {
+    min: number;
+    max: number;
+    mean: number;
+    median: number;
+  };
+}
+
+interface OpenAQResponse<T> {
   meta: {
     name: string;
-    license: string;
     website: string;
     page: number;
     limit: number;
     found: number;
   };
-  results: OpenAQMeasurement[];
+  results: T[];
 }
 
 export class OpenAQClient {
-  private readonly baseUrl = 'https://api.openaq.org/v2';
-  
+  private readonly baseUrl = 'https://api.openaq.org/v3';
+  private readonly apiKey: string;
+  private europeanCountryIds: number[] = [];
+
+  constructor() {
+    this.apiKey = process.env.OPENAQ_API_KEY || '';
+    if (!this.apiKey) {
+      console.warn('⚠️ OPENAQ_API_KEY not set - OpenAQ requests will fail');
+    }
+  }
+
   /**
-   * Fetch hourly air quality data for PM2.5 and NO2 from OpenAQ
+   * Fetch hourly air quality data for PM2.5 and NO2 from OpenAQ v3
    * Returns data for the last hour from European stations
    */
   async fetchHourlyData(): Promise<OpenAQMeasurement[]> {
     try {
-      console.log('🌐 Fetching hourly air quality data from OpenAQ...');
+      console.log('🌐 Fetching hourly air quality data from OpenAQ v3...');
       
-      // Get current hour in UTC
-      const now = new Date();
-      const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
-      
-      const params = {
-        parameter: 'pm25,no2',
-        country: 'AT,BE,BG,HR,CY,CZ,DK,EE,FI,FR,DE,GR,HU,IE,IT,LV,LT,LU,MT,NL,PL,PT,RO,SK,SI,ES,SE,GB,NO,CH', // European countries
-        date_from: oneHourAgo.toISOString(),
-        date_to: now.toISOString(),
-        limit: 10000, // Maximum allowed
-        page: 1,
-        offset: 0,
-        sort: 'desc',
-        radius: 1000000, // Large radius to capture European data
-        order_by: 'datetime'
-      };
+      if (!this.apiKey) {
+        throw new Error('OpenAQ API key not configured');
+      }
 
-      console.log(`📊 OpenAQ API call: ${oneHourAgo.toISOString()} to ${now.toISOString()}`);
-      
-      const response = await axios.get<OpenAQResponse>(`${this.baseUrl}/measurements`, {
-        params,
-        timeout: 30000, // 30 second timeout
-        headers: {
-          'User-Agent': 'Environmental-Monitoring-System/1.0'
-        }
-      });
+      // Step 1: Get European country IDs (cache for efficiency)
+      if (this.europeanCountryIds.length === 0) {
+        await this.loadEuropeanCountries();
+      }
 
-      if (!response.data?.results) {
-        console.warn('⚠️ OpenAQ response missing results array');
+      // Step 2: Get locations with PM2.5 and NO2 sensors in European countries
+      const locations = await this.getEuropeanLocations();
+      
+      if (locations.length === 0) {
+        console.warn('⚠️ No European locations found with PM2.5/NO2 sensors');
         return [];
       }
 
-      // Filter for valid measurements with coordinates
-      const validData = response.data.results.filter(measurement => 
-        measurement.value !== null && 
-        measurement.value !== undefined &&
-        measurement.coordinates?.latitude &&
-        measurement.coordinates?.longitude &&
-        ['pm25', 'no2'].includes(measurement.parameter) &&
-        !measurement.isMobile // Exclude mobile measurements for consistency
-      );
+      console.log(`📍 Found ${locations.length} European locations with relevant sensors`);
 
-      console.log(`✅ OpenAQ: Retrieved ${validData.length} valid hourly observations`);
-      return validData;
+      // Step 3: Get recent hourly measurements from these locations
+      const measurements = await this.getRecentMeasurements(locations);
+      
+      console.log(`✅ OpenAQ v3: Retrieved ${measurements.length} valid hourly observations`);
+      return measurements;
       
     } catch (error: any) {
-      console.error('❌ OpenAQ API fetch failed:', {
+      console.error('❌ OpenAQ v3 API fetch failed:', {
         message: error.message,
         status: error.response?.status,
         statusText: error.response?.statusText
@@ -101,44 +124,160 @@ export class OpenAQClient {
   }
 
   /**
-   * Convert OpenAQ data format to standardized observation format
+   * Load European country IDs from OpenAQ API
+   */
+  private async loadEuropeanCountries(): Promise<void> {
+    const europeanCodes = ['AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE', 'GB', 'NO', 'CH'];
+    
+    try {
+      const response = await axios.get<OpenAQResponse<OpenAQCountry>>(`${this.baseUrl}/countries`, {
+        params: { limit: 300 },
+        headers: {
+          'X-API-Key': this.apiKey,
+          'User-Agent': 'Environmental-Monitoring-System/1.0'
+        },
+        timeout: 15000
+      });
+
+      this.europeanCountryIds = response.data.results
+        .filter(country => europeanCodes.includes(country.code))
+        .map(country => country.id);
+      
+      console.log(`📍 Loaded ${this.europeanCountryIds.length} European country IDs from OpenAQ`);
+    } catch (error: any) {
+      console.error('❌ Failed to load European countries:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Get locations in European countries with PM2.5 and NO2 sensors
+   */
+  private async getEuropeanLocations(): Promise<OpenAQLocation[]> {
+    try {
+      const response = await axios.get<OpenAQResponse<OpenAQLocation>>(`${this.baseUrl}/locations`, {
+        params: {
+          countries_id: this.europeanCountryIds.join(','),
+          parameters_id: '2,7', // 2=PM2.5, 7=NO2 (based on OpenAQ parameter IDs)
+          limit: 1000,
+          monitor: true, // Only reference monitors
+          mobile: false  // Exclude mobile stations
+        },
+        headers: {
+          'X-API-Key': this.apiKey,
+          'User-Agent': 'Environmental-Monitoring-System/1.0'
+        },
+        timeout: 20000
+      });
+
+      return response.data.results.filter(location => 
+        location.coordinates?.latitude && 
+        location.coordinates?.longitude &&
+        location.sensors?.some(sensor => 
+          ['pm25', 'no2'].includes(sensor.parameter.name)
+        )
+      );
+    } catch (error: any) {
+      console.error('❌ Failed to get European locations:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Get recent hourly measurements from locations
+   */
+  private async getRecentMeasurements(locations: OpenAQLocation[]): Promise<OpenAQMeasurement[]> {
+    const measurements: OpenAQMeasurement[] = [];
+    const now = new Date();
+    const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000); // 2 hours for buffer
+
+    // Process locations in batches to avoid overwhelming the API
+    const batchSize = 10;
+    for (let i = 0; i < locations.length; i += batchSize) {
+      const batch = locations.slice(i, i + batchSize);
+      
+      const batchPromises = batch.map(async (location) => {
+        try {
+          // Get relevant sensors (PM2.5 and NO2)
+          const relevantSensors = location.sensors.filter(sensor => 
+            ['pm25', 'no2'].includes(sensor.parameter.name)
+          );
+
+          for (const sensor of relevantSensors) {
+            try {
+              const response = await axios.get<OpenAQResponse<OpenAQMeasurement>>(
+                `${this.baseUrl}/sensors/${sensor.id}/hours`, {
+                params: {
+                  date_from: twoHoursAgo.toISOString(),
+                  date_to: now.toISOString(),
+                  limit: 100
+                },
+                headers: {
+                  'X-API-Key': this.apiKey,
+                  'User-Agent': 'Environmental-Monitoring-System/1.0'
+                },
+                timeout: 10000
+              });
+
+              const validMeasurements = response.data.results.filter(m => 
+                m.value !== null && m.value !== undefined && m.value >= 0
+              );
+
+              measurements.push(...validMeasurements.map(m => ({
+                ...m,
+                coordinates: location.coordinates,
+                locationId: location.id,
+                countryCode: location.country.code
+              } as any)));
+
+            } catch (sensorError: any) {
+              console.warn(`⚠️ Failed to get measurements for sensor ${sensor.id}:`, sensorError.message);
+            }
+          }
+        } catch (locationError: any) {
+          console.warn(`⚠️ Failed to process location ${location.id}:`, locationError.message);
+        }
+      });
+
+      await Promise.all(batchPromises);
+      
+      // Add delay between batches to be respectful to API
+      if (i + batchSize < locations.length) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+
+    return measurements;
+  }
+
+  /**
+   * Convert OpenAQ v3 data format to standardized observation format
    */
   convertToObservations(measurements: OpenAQMeasurement[]): any[] {
     return measurements.map(measurement => {
       // Determine AQI band based on WHO guidelines
       let aqiBand = 'good';
       
-      if (measurement.parameter === 'pm25') {
+      if (measurement.parameter.name === 'pm25') {
         if (measurement.value > 25) aqiBand = 'unhealthy';
         else if (measurement.value > 15) aqiBand = 'moderate';
-      } else if (measurement.parameter === 'no2') {
+      } else if (measurement.parameter.name === 'no2') {
         if (measurement.value > 40) aqiBand = 'unhealthy'; 
         else if (measurement.value > 25) aqiBand = 'moderate';
       }
 
-      // Map country names to ISO codes (simplified mapping for MVP)
-      const countryCodeMap: Record<string, string> = {
-        'Austria': 'AT', 'Belgium': 'BE', 'Bulgaria': 'BG', 'Croatia': 'HR',
-        'Cyprus': 'CY', 'Czech Republic': 'CZ', 'Denmark': 'DK', 'Estonia': 'EE',
-        'Finland': 'FI', 'France': 'FR', 'Germany': 'DE', 'Greece': 'GR',
-        'Hungary': 'HU', 'Ireland': 'IE', 'Italy': 'IT', 'Latvia': 'LV',
-        'Lithuania': 'LT', 'Luxembourg': 'LU', 'Malta': 'MT', 'Netherlands': 'NL',
-        'Poland': 'PL', 'Portugal': 'PT', 'Romania': 'RO', 'Slovakia': 'SK',
-        'Slovenia': 'SI', 'Spain': 'ES', 'Sweden': 'SE', 'United Kingdom': 'GB',
-        'Norway': 'NO', 'Switzerland': 'CH'
-      };
-
-      const countryCode = countryCodeMap[measurement.country] || measurement.country?.substring(0, 2)?.toUpperCase();
+      // Use the country code from the location data (already available from API)
+      const countryCode = (measurement as any).countryCode || 'UNKNOWN';
 
       return {
-        station_id: `openaq-${measurement.locationId}`,
-        pollutant: measurement.parameter,
+        station_id: `openaq-${(measurement as any).locationId}`,
+        pollutant: measurement.parameter.name,
         value: measurement.value,
-        unit: measurement.unit,
+        unit: measurement.parameter.units,
         aqi_band: aqiBand,
-        observed_at: new Date(measurement.date.utc).toISOString(),
-        lat: measurement.coordinates.latitude,
-        lon: measurement.coordinates.longitude,
+        observed_at: new Date(measurement.period.datetime_from.utc).toISOString(),
+        lat: measurement.coordinates?.latitude || null,
+        lon: measurement.coordinates?.longitude || null,
         country_code: countryCode,
         region_code: countryCode, // MVP: use country code as region
         source: 'OpenAQ',
