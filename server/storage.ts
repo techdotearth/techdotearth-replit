@@ -1,4 +1,4 @@
-import { challenges, challengeSources, type Challenge, type InsertChallenge, type ChallengeType, type FrontendChallenge, type Source } from "../shared/schema";
+import { challenges, challengeSources, aqObservations, type Challenge, type InsertChallenge, type ChallengeType, type FrontendChallenge, type Source, type InsertAqObservation } from "../shared/schema";
 import { db } from "./db";
 import { eq, and, desc, asc } from "drizzle-orm";
 
@@ -8,7 +8,7 @@ export interface IStorage {
   createChallenge(insertChallenge: InsertChallenge, sources: Source[]): Promise<FrontendChallenge>;
   updateChallenge(id: string, challenge: Partial<InsertChallenge>): Promise<FrontendChallenge | undefined>;
   deleteChallenge(id: string): Promise<boolean>;
-  insertAirQualityObservations(observations: any[]): Promise<{ inserted: number }>;
+  insertAirQualityObservations(observations: InsertAqObservation[]): Promise<{ inserted: number }>;
 }
 
 // Helper function to map database records to frontend interface
@@ -137,19 +137,36 @@ export class DatabaseStorage implements IStorage {
     return result.rowCount > 0;
   }
 
-  async insertAirQualityObservations(observations: any[]): Promise<{ inserted: number }> {
+  async insertAirQualityObservations(observations: InsertAqObservation[]): Promise<{ inserted: number }> {
     try {
       if (observations.length === 0) {
         return { inserted: 0 };
       }
 
-      // For now, just log the observations since there's no aq_observation table
-      // The system uses the challenges table for air quality data instead
-      console.log(`📊 Would insert ${observations.length} air quality observations`);
-      console.log('Sample observation:', observations[0]);
-      
-      // TODO: Either create aq_observation table or transform to challenges format
-      return { inserted: observations.length };
+      console.log(`💾 Inserting ${observations.length} observations to aq_observations table...`);
+
+      // Insert in batches for performance, using onConflictDoNothing for deduplication
+      const batchSize = 1000;
+      let totalInserted = 0;
+
+      for (let i = 0; i < observations.length; i += batchSize) {
+        const batch = observations.slice(i, i + batchSize);
+        
+        const result = await db
+          .insert(aqObservations)
+          .values(batch)
+          .onConflictDoNothing({ target: [
+            aqObservations.stationId, 
+            aqObservations.pollutant, 
+            aqObservations.observedAt
+          ] });
+        
+        totalInserted += result.rowCount || 0;
+        console.log(`📊 Batch ${Math.floor(i / batchSize) + 1}: ${result.rowCount || 0} rows inserted`);
+      }
+
+      console.log(`✅ Total inserted: ${totalInserted} air quality observations`);
+      return { inserted: totalInserted };
     } catch (error: any) {
       console.error('❌ Failed to insert air quality observations:', error.message);
       throw error;
