@@ -134,7 +134,7 @@ export class DatabaseStorage implements IStorage {
 
     // Delete the challenge (sources will be cascade deleted due to foreign key constraint)
     const result = await db.delete(challenges).where(eq(challenges.challengeId, id));
-    return result.rowCount > 0;
+    return (result.rowCount ?? 0) > 0;
   }
 
   async insertAirQualityObservations(observations: InsertAqObservation[]): Promise<{ inserted: number }> {

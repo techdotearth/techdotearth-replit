@@ -355,16 +355,16 @@ export class OpenAQClient {
       const countryCode = (measurement as any).countryCode || 'UNKNOWN';
 
       return {
-        station_id: `openaq-${(measurement as any).locationId}`,
+        stationId: `openaq-${(measurement as any).locationId}`,
         pollutant: measurement.parameter.name,
         value: measurement.value,
         unit: measurement.parameter.units,
-        aqi_band: aqiBand,
-        observed_at: this.parseOpenAQDate(measurement),
+        aqiBand: aqiBand,
+        observedAt: new Date(this.parseOpenAQDate(measurement)),
         lat: measurement.coordinates?.latitude || null,
         lon: measurement.coordinates?.longitude || null,
-        country_code: countryCode,
-        region_code: countryCode, // MVP: use country code as region
+        countryCode: countryCode,
+        regionCode: countryCode, // MVP: use country code as region
         source: 'OpenAQ',
         raw: measurement
       };
