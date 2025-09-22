@@ -42,7 +42,7 @@ export class CronScheduler {
    * Cron: 0 * * * * (every hour at minute 0)
    */
   private scheduleAirQualityIngestion(): void {
-    const cronExpression = '15 * * * *'; // Every hour at minute 0
+    const cronExpression = '38 * * * *'; // Every hour at minute 0
     const taskName = 'air-quality-ingestion';
 
     const task = cron.schedule(cronExpression, async () => {
