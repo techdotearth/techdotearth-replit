@@ -76,7 +76,6 @@ export class OpenAQClient {
   private rateLimiter: OpenAQRateLimiter;
 
   constructor() {
-    console.log("!!!!!!",process.env.TEST)
     this.apiKey = process.env.OPENAQ_API_KEY || '';
     this.rateLimiter = new OpenAQRateLimiter();
     if (!this.apiKey) {
