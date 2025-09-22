@@ -290,16 +290,35 @@ export class OpenAQClient {
   private parseOpenAQDate(measurement: any): string {
     try {
       // Try different possible date fields in OpenAQ v3 response
-      const dateValue = measurement.period?.datetime_from?.utc ||
-                       measurement.period?.datetime_from ||
-                       measurement.datetime_from?.utc ||
-                       measurement.datetime_from ||
-                       measurement.date?.utc ||
-                       measurement.date ||
-                       measurement.timestamp;
+      // Check period.datetimeFrom first (most common in v3)
+      let dateValue = null;
+      
+      if (measurement.period?.datetimeFrom) {
+        // Handle both string and object formats
+        if (typeof measurement.period.datetimeFrom === 'string') {
+          dateValue = measurement.period.datetimeFrom;
+        } else if (measurement.period.datetimeFrom.utc) {
+          dateValue = measurement.period.datetimeFrom.utc;
+        } else {
+          // Convert the object to ISO string if it has date components
+          dateValue = new Date(measurement.period.datetimeFrom).toISOString();
+        }
+      }
+
+      // Fallback to other possible date fields
+      if (!dateValue) {
+        dateValue = measurement.period?.datetime_from?.utc ||
+                   measurement.period?.datetime_from ||
+                   measurement.datetime_from?.utc ||
+                   measurement.datetime_from ||
+                   measurement.date?.utc ||
+                   measurement.date ||
+                   measurement.timestamp;
+      }
 
       if (!dateValue) {
         console.warn('⚠️ No date field found in measurement:', Object.keys(measurement));
+        console.warn('Period object:', measurement.period);
         return new Date().toISOString(); // Fallback to current time
       }
 
