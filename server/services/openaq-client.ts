@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { OpenAQRateLimiter } from '../utils/rate-limiter';
 
 interface OpenAQCountry {
   id: number;
@@ -72,11 +73,54 @@ export class OpenAQClient {
   private readonly baseUrl = 'https://api.openaq.org/v3';
   private readonly apiKey: string;
   private europeanCountryIds: number[] = [];
+  private rateLimiter: OpenAQRateLimiter;
 
   constructor() {
     this.apiKey = process.env.OPENAQ_API_KEY || '';
+    this.rateLimiter = new OpenAQRateLimiter();
     if (!this.apiKey) {
       console.warn('⚠️ OPENAQ_API_KEY not set - OpenAQ requests will fail');
+    }
+  }
+
+  /**
+   * Make a rate-limited API request to OpenAQ
+   */
+  private async makeRateLimitedRequest<T>(url: string, params: any = {}): Promise<T> {
+    // Wait if necessary to avoid rate limit violations
+    await this.rateLimiter.waitIfNeeded();
+
+    try {
+      const response = await axios.get<T>(url, {
+        params,
+        headers: {
+          'X-API-Key': this.apiKey,
+          'User-Agent': 'Environmental-Monitoring-System/1.0'
+        },
+        timeout: 20000
+      });
+
+      // Record successful request with rate limit headers
+      this.rateLimiter.recordRequest(response.headers as Record<string, string>);
+      
+      return response.data;
+    } catch (error: any) {
+      if (error.response?.status === 429) {
+        // Handle rate limit error
+        await this.rateLimiter.handle429Error(error.response.headers);
+        // Retry the request once after waiting
+        const retryResponse = await axios.get<T>(url, {
+          params,
+          headers: {
+            'X-API-Key': this.apiKey,
+            'User-Agent': 'Environmental-Monitoring-System/1.0'
+          },
+          timeout: 20000
+        });
+        this.rateLimiter.recordRequest(retryResponse.headers as Record<string, string>);
+        return retryResponse.data;
+      }
+      throw error;
     }
   }
 
@@ -130,20 +174,17 @@ export class OpenAQClient {
     const europeanCodes = ['AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE', 'GB', 'NO', 'CH'];
     
     try {
-      const response = await axios.get<OpenAQResponse<OpenAQCountry>>(`${this.baseUrl}/countries`, {
-        params: { limit: 300 },
-        headers: {
-          'X-API-Key': this.apiKey,
-          'User-Agent': 'Environmental-Monitoring-System/1.0'
-        },
-        timeout: 15000
-      });
+      console.log('📍 Loading European countries from OpenAQ...');
+      const response = await this.makeRateLimitedRequest<OpenAQResponse<OpenAQCountry>>(
+        `${this.baseUrl}/countries`, 
+        { limit: 300 }
+      );
 
-      this.europeanCountryIds = response.data.results
+      this.europeanCountryIds = response.results
         .filter(country => europeanCodes.includes(country.code))
         .map(country => country.id);
       
-      console.log(`📍 Loaded ${this.europeanCountryIds.length} European country IDs from OpenAQ`);
+      console.log(`✅ Loaded ${this.europeanCountryIds.length} European country IDs from OpenAQ`);
     } catch (error: any) {
       console.error('❌ Failed to load European countries:', error.message);
       throw error;
@@ -155,28 +196,28 @@ export class OpenAQClient {
    */
   private async getEuropeanLocations(): Promise<OpenAQLocation[]> {
     try {
-      const response = await axios.get<OpenAQResponse<OpenAQLocation>>(`${this.baseUrl}/locations`, {
-        params: {
+      console.log('📍 Loading European monitoring locations...');
+      const response = await this.makeRateLimitedRequest<OpenAQResponse<OpenAQLocation>>(
+        `${this.baseUrl}/locations`,
+        {
           countries_id: this.europeanCountryIds.join(','),
           parameters_id: '2,7', // 2=PM2.5, 7=NO2 (based on OpenAQ parameter IDs)
           limit: 1000,
           monitor: true, // Only reference monitors
           mobile: false  // Exclude mobile stations
-        },
-        headers: {
-          'X-API-Key': this.apiKey,
-          'User-Agent': 'Environmental-Monitoring-System/1.0'
-        },
-        timeout: 20000
-      });
+        }
+      );
 
-      return response.data.results.filter(location => 
+      const validLocations = response.results.filter(location => 
         location.coordinates?.latitude && 
         location.coordinates?.longitude &&
         location.sensors?.some(sensor => 
           ['pm25', 'no2'].includes(sensor.parameter.name)
         )
       );
+
+      console.log(`✅ Found ${validLocations.length} valid European locations`);
+      return validLocations;
     } catch (error: any) {
       console.error('❌ Failed to get European locations:', error.message);
       throw error;
@@ -184,66 +225,130 @@ export class OpenAQClient {
   }
 
   /**
-   * Get recent hourly measurements from locations
+   * Get recent hourly measurements from locations using optimized batch approach
    */
   private async getRecentMeasurements(locations: OpenAQLocation[]): Promise<OpenAQMeasurement[]> {
     const measurements: OpenAQMeasurement[] = [];
     const now = new Date();
-    const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000); // 2 hours for buffer
+    const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
 
-    // Process locations in batches to avoid overwhelming the API
-    const batchSize = 10;
-    for (let i = 0; i < locations.length; i += batchSize) {
-      const batch = locations.slice(i, i + batchSize);
-      
-      const batchPromises = batch.map(async (location) => {
+    console.log(`📊 Fetching measurements from ${locations.length} locations with rate limiting...`);
+
+    // Strategy: Use bulk measurements endpoint to reduce API calls
+    // Instead of individual sensor calls, try location-based batched requests
+    const maxLocationsPerRequest = 50; // Conservative batch size to stay within rate limits
+    
+    for (let i = 0; i < locations.length; i += maxLocationsPerRequest) {
+      const locationBatch = locations.slice(i, i + maxLocationsPerRequest);
+      const locationIds = locationBatch.map(loc => loc.id);
+
+      try {
+        console.log(`📡 Fetching measurements for batch ${Math.floor(i/maxLocationsPerRequest) + 1}/${Math.ceil(locations.length/maxLocationsPerRequest)} (${locationBatch.length} locations)`);
+        
+        // Use bulk measurements endpoint if available, otherwise fall back to individual calls
+        const response = await this.makeRateLimitedRequest<OpenAQResponse<OpenAQMeasurement>>(
+          `${this.baseUrl}/measurements`,
+          {
+            locations_id: locationIds.join(','),
+            parameters_id: '2,7', // PM2.5 and NO2
+            date_from: twoHoursAgo.toISOString(),
+            date_to: now.toISOString(),
+            limit: 10000, // Get as many as possible in one call
+            sort: 'desc'
+          }
+        );
+
+        const validMeasurements = response.results.filter(m => 
+          m.value !== null && m.value !== undefined && m.value >= 0
+        );
+
+        // Enrich measurements with location data
+        const enrichedMeasurements = validMeasurements.map(measurement => {
+          const location = locationBatch.find(loc => loc.id === (measurement as any).location?.id);
+          return {
+            ...measurement,
+            coordinates: location?.coordinates || measurement.coordinates,
+            locationId: location?.id || (measurement as any).location?.id,
+            countryCode: location?.country?.code || 'UNKNOWN'
+          } as any;
+        });
+
+        measurements.push(...enrichedMeasurements);
+        console.log(`✅ Retrieved ${enrichedMeasurements.length} measurements from batch`);
+
+      } catch (bulkError: any) {
+        // If bulk request fails, fall back to individual sensor requests with heavy rate limiting
+        console.warn(`⚠️ Bulk request failed, falling back to individual sensor requests: ${bulkError.message}`);
+        
+        const fallbackMeasurements = await this.getFallbackMeasurements(locationBatch, twoHoursAgo, now);
+        measurements.push(...fallbackMeasurements);
+      }
+
+      // Add extra delay between batches to be respectful to rate limits
+      if (i + maxLocationsPerRequest < locations.length) {
+        const delay = 2000; // 2 second delay between batches
+        console.log(`⏳ Waiting ${delay/1000}s before next batch...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+
+    console.log(`✅ Total measurements retrieved: ${measurements.length}`);
+    return measurements;
+  }
+
+  /**
+   * Fallback method for individual sensor requests with strict rate limiting
+   */
+  private async getFallbackMeasurements(
+    locations: OpenAQLocation[], 
+    dateFrom: Date, 
+    dateTo: Date
+  ): Promise<OpenAQMeasurement[]> {
+    const measurements: OpenAQMeasurement[] = [];
+    
+    // Limit to first 20 locations to avoid rate limit issues
+    const limitedLocations = locations.slice(0, 20);
+    console.log(`⚠️ Using fallback mode for ${limitedLocations.length} locations (limited to avoid rate limits)`);
+
+    for (const location of limitedLocations) {
+      const relevantSensors = location.sensors.filter(sensor => 
+        ['pm25', 'no2'].includes(sensor.parameter.name)
+      ).slice(0, 2); // Limit to 2 sensors per location
+
+      for (const sensor of relevantSensors) {
         try {
-          // Get relevant sensors (PM2.5 and NO2)
-          const relevantSensors = location.sensors.filter(sensor => 
-            ['pm25', 'no2'].includes(sensor.parameter.name)
+          console.log(`📊 Fetching sensor ${sensor.id} for location ${location.id}`);
+          
+          const response = await this.makeRateLimitedRequest<OpenAQResponse<OpenAQMeasurement>>(
+            `${this.baseUrl}/sensors/${sensor.id}/hours`,
+            {
+              date_from: dateFrom.toISOString(),
+              date_to: dateTo.toISOString(),
+              limit: 100
+            }
           );
 
-          for (const sensor of relevantSensors) {
-            try {
-              const response = await axios.get<OpenAQResponse<OpenAQMeasurement>>(
-                `${this.baseUrl}/sensors/${sensor.id}/hours`, {
-                params: {
-                  date_from: twoHoursAgo.toISOString(),
-                  date_to: now.toISOString(),
-                  limit: 100
-                },
-                headers: {
-                  'X-API-Key': this.apiKey,
-                  'User-Agent': 'Environmental-Monitoring-System/1.0'
-                },
-                timeout: 10000
-              });
+          const validMeasurements = response.results.filter(m => 
+            m.value !== null && m.value !== undefined && m.value >= 0
+          );
 
-              const validMeasurements = response.data.results.filter(m => 
-                m.value !== null && m.value !== undefined && m.value >= 0
-              );
+          measurements.push(...validMeasurements.map(m => ({
+            ...m,
+            coordinates: location.coordinates,
+            locationId: location.id,
+            countryCode: location.country.code
+          } as any)));
 
-              measurements.push(...validMeasurements.map(m => ({
-                ...m,
-                coordinates: location.coordinates,
-                locationId: location.id,
-                countryCode: location.country.code
-              } as any)));
-
-            } catch (sensorError: any) {
-              console.warn(`⚠️ Failed to get measurements for sensor ${sensor.id}:`, sensorError.message);
-            }
+          // Rate limit status check
+          const status = this.rateLimiter.getStatus();
+          if (status.minuteUsage.remaining < 10) {
+            console.log(`⚠️ Rate limit approaching (${status.minuteUsage.remaining} requests remaining), stopping fallback`);
+            break;
           }
-        } catch (locationError: any) {
-          console.warn(`⚠️ Failed to process location ${location.id}:`, locationError.message);
-        }
-      });
 
-      await Promise.all(batchPromises);
-      
-      // Add delay between batches to be respectful to API
-      if (i + batchSize < locations.length) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (sensorError: any) {
+          console.warn(`⚠️ Failed to get measurements for sensor ${sensor.id}:`, sensorError.message);
+        }
       }
     }
 
