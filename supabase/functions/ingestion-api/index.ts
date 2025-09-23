@@ -16,6 +16,52 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     )
 
+    // JWT-based admin authentication (same as admin-api)
+    const authHeader = req.headers.get('Authorization')
+    if (!authHeader?.startsWith('Bearer ')) {
+      return new Response(
+        JSON.stringify({ error: 'Unauthorized - Bearer token required' }),
+        { 
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        }
+      )
+    }
+
+    const token = authHeader.slice(7)
+    
+    // Verify JWT token with Supabase Auth
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token)
+    
+    if (authError || !user) {
+      console.error('❌ Invalid JWT token:', authError?.message)
+      return new Response(
+        JSON.stringify({ error: 'Unauthorized - invalid token' }),
+        { 
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        }
+      )
+    }
+    
+    // Server-side admin verification using database table (secure)
+    const { data: adminCheck, error: adminError } = await supabase
+      .from('admin_users')
+      .select('role')
+      .eq('user_id', user.id)
+      .single()
+    
+    if (adminError || !adminCheck) {
+      console.warn('⚠️ User not found in admin table:', user.email)
+      return new Response(
+        JSON.stringify({ error: 'Forbidden - admin access required' }),
+        { 
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        }
+      )
+    }
+
     const url = new URL(req.url)
     const method = req.method
     const pathname = url.pathname

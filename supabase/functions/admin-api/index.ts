@@ -48,13 +48,15 @@ Deno.serve(async (req) => {
       )
     }
     
-    // Check if user has admin role
-    const isAdmin = user.app_metadata?.role === 'admin' || 
-                   user.user_metadata?.role === 'admin' ||
-                   user.email?.endsWith('@admin.com') // Simple demo rule
+    // Server-side admin verification using database table (secure)
+    const { data: adminCheck, error: adminError } = await supabase
+      .from('admin_users')
+      .select('role')
+      .eq('user_id', user.id)
+      .single()
     
-    if (!isAdmin) {
-      console.warn('⚠️ User lacks admin privileges:', user.email)
+    if (adminError || !adminCheck) {
+      console.warn('⚠️ User not found in admin table:', user.email)
       return new Response(
         JSON.stringify({ error: 'Forbidden - admin access required' }),
         { 
@@ -63,6 +65,8 @@ Deno.serve(async (req) => {
         }
       )
     }
+
+    console.log('✅ Admin access verified for:', user.email)
 
     // Use authenticated user ID for audit trail
     const adminUserId = user.id

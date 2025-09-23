@@ -296,9 +296,17 @@ class ApiService {
     }
   }
 
-  // Submit admin override using Supabase edge function
+  // Submit admin override using Supabase edge function with real JWT
   async submitAdminOverride(type: ChallengeType, regionCode: string, score: number, note: string): Promise<boolean> {
     try {
+      // Get current user session with JWT token
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+      
+      if (sessionError || !session?.access_token) {
+        console.error('❌ No valid session for admin operation:', sessionError?.message)
+        throw new Error('Authentication required - please login')
+      }
+
       const typeMap: Record<ChallengeType, string> = {
         'air-quality': 'air_quality',
         'heat': 'heat',
@@ -310,7 +318,7 @@ class ApiService {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer admin-token', // TODO: Use proper Supabase auth - this needs to be replaced with actual JWT token
+          'Authorization': `Bearer ${session.access_token}`, // Real JWT token
         },
         body: JSON.stringify({
           type: typeMap[type],
@@ -321,7 +329,12 @@ class ApiService {
       });
 
       if (!response.ok) {
-        throw new Error(`Admin override failed: ${response.status}`);
+        if (response.status === 401) {
+          throw new Error('Authentication required - please login')
+        } else if (response.status === 403) {
+          throw new Error('Admin access required - insufficient permissions')
+        }
+        throw new Error(`Admin override failed: ${response.status}`)
       }
 
       return true;
@@ -348,9 +361,17 @@ class ApiService {
     }
   }
 
-  // Trigger score computation using Supabase edge function
+  // Trigger score computation using Supabase edge function with real JWT
   async computeScores(types?: ChallengeType[]): Promise<boolean> {
     try {
+      // Get current user session with JWT token
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+      
+      if (sessionError || !session?.access_token) {
+        console.error('❌ No valid session for admin operation:', sessionError?.message)
+        throw new Error('Authentication required - please login')
+      }
+
       const typeMap: Record<ChallengeType, string> = {
         'air-quality': 'air_quality',
         'heat': 'heat',
@@ -364,12 +385,18 @@ class ApiService {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`, // Real JWT token
         },
         body: JSON.stringify({ types: backendTypes })
       });
 
       if (!response.ok) {
-        throw new Error(`Score computation failed: ${response.status}`);
+        if (response.status === 401) {
+          throw new Error('Authentication required - please login')
+        } else if (response.status === 403) {
+          throw new Error('Admin access required - insufficient permissions')
+        }
+        throw new Error(`Score computation failed: ${response.status}`)
       }
 
       return true;
