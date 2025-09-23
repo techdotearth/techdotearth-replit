@@ -13,7 +13,7 @@ app.listen(PORT, () => {
   // Start scheduled tasks
   // scheduler.start();
   
-  console.log(`⏰ Cron scheduler started for air quality ingestion`);
+  //console.log(`⏰ Cron scheduler started for air quality ingestion`);
 });
 
 // Graceful shutdown
