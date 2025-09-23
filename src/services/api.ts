@@ -112,19 +112,19 @@ class ApiService {
         item.intensity < 0.3 ? 'down' : 'flat';
 
       return {
-        id: `${type}-${item.region_name || item.region_code}`,
+        id: `${type}-${item.region_name}`,
         type,
         regionName: item.region_name,
-        regionCode: item.region_code || item.region_name,
+        regionCode: item.region_name, // Use region_name as the code since that's what our DB uses
         countryCode: item.country_code,
         score: parseInt(item.display_score || item.score),
         freshness: item.freshness as Challenge['freshness'],
         intensity: parseFloat(item.intensity || '0'),
         exposure: item.peopleexposed ? parseFloat(item.peopleexposed) : undefined,
         persistence: item.persistence ? parseFloat(item.persistence) : undefined,
-        peopleExposed: item.people_exposed || 0,
+        peopleExposed: item.peopleexposed || 0, // Fixed field mapping
         exposureTrend,
-        updatedIso: item.created_at || item.updated_at || new Date().toISOString(),
+        updatedIso: item.updated_at || item.created_at || new Date().toISOString(),
         sources: sourceMap[type],
         hasOverride: false,
         rank: index + 1
@@ -191,7 +191,7 @@ class ApiService {
       console.log(`🔄 Fetching challenges for ${type}`);
       
       const typeMap: Record<ChallengeType, string> = {
-        'air-quality': 'air-quality',
+        'air-quality': 'air_quality',
         'heat': 'heat',
         'floods': 'floods',
         'wildfire': 'wildfire'
@@ -231,7 +231,7 @@ class ApiService {
   async getChallengeDetail(type: ChallengeType, regionCode: string): Promise<Challenge | null> {
     try {
       const typeMap: Record<ChallengeType, string> = {
-        'air-quality': 'air-quality',
+        'air-quality': 'air_quality',
         'heat': 'heat',
         'floods': 'floods',
         'wildfire': 'wildfire'
@@ -310,7 +310,7 @@ class ApiService {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer admin-token', // TODO: Use proper Supabase auth
+          'Authorization': 'Bearer admin-token', // TODO: Use proper Supabase auth - this needs to be replaced with actual JWT token
         },
         body: JSON.stringify({
           type: typeMap[type],

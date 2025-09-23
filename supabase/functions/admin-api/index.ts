@@ -20,11 +20,11 @@ Deno.serve(async (req) => {
     const method = req.method
     const pathname = url.pathname
 
-    // Simple auth middleware - check for admin token
+    // JWT-based admin authentication
     const authHeader = req.headers.get('Authorization')
-    if (!authHeader || authHeader !== 'Bearer admin-token') {
+    if (!authHeader?.startsWith('Bearer ')) {
       return new Response(
-        JSON.stringify({ error: 'Unauthorized - admin token required' }),
+        JSON.stringify({ error: 'Unauthorized - Bearer token required' }),
         { 
           status: 401,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -32,8 +32,40 @@ Deno.serve(async (req) => {
       )
     }
 
-    // Admin user ID for audit trail
-    const adminUserId = '11111111-1111-1111-1111-111111111111'
+    const token = authHeader.slice(7)
+    
+    // Verify JWT token with Supabase Auth
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token)
+    
+    if (authError || !user) {
+      console.error('❌ Invalid JWT token:', authError?.message)
+      return new Response(
+        JSON.stringify({ error: 'Unauthorized - invalid token' }),
+        { 
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        }
+      )
+    }
+    
+    // Check if user has admin role
+    const isAdmin = user.app_metadata?.role === 'admin' || 
+                   user.user_metadata?.role === 'admin' ||
+                   user.email?.endsWith('@admin.com') // Simple demo rule
+    
+    if (!isAdmin) {
+      console.warn('⚠️ User lacks admin privileges:', user.email)
+      return new Response(
+        JSON.stringify({ error: 'Forbidden - admin access required' }),
+        { 
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        }
+      )
+    }
+
+    // Use authenticated user ID for audit trail
+    const adminUserId = user.id
 
     // Route: POST /api/admin/override
     if (pathname === '/api/admin/override' && method === 'POST') {
