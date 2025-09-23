@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { LeaderboardTable } from '../components/LeaderboardTable';
 import { ChallengeType } from '../App';
-import { apiService, Challenge } from '../services/api';
+import { getChallenges, Challenge } from '../services/api';
 interface TrendingChallengesProps {
   activeTab: ChallengeType;
   onSelectChallenge: (id: string) => void;
@@ -22,7 +22,7 @@ export const TrendingChallenges: React.FC<TrendingChallengesProps> = ({
       setLoading(true);
       try {
         console.log(`🔄 Fetching challenges for ${activeTab}`);
-        const data = await apiService.getChallenges(activeTab);
+        const data = await getChallenges(activeTab);
         setChallenges(data);
         setLastUpdated(new Date().toISOString());
         console.log(`✅ Loaded ${data.length} challenges for ${activeTab}`);

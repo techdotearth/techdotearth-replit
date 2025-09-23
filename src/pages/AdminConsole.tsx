@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeftIcon, AlertCircleIcon, CheckCircleIcon, XIcon } from 'lucide-react';
-import { apiService, Challenge } from '../services/api';
+import { getAllChallenges, submitAdminOverride, Challenge } from '../services/api';
 interface AdminConsoleProps {
   onBack: () => void;
 }
@@ -18,7 +18,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       setLoading(true);
       try {
         console.log('🔄 Fetching all challenges for admin console');
-        const data = await apiService.getAllChallenges();
+        const data = await getAllChallenges();
         setAllChallenges(data);
         console.log(`✅ Loaded ${data.length} challenges for admin console`);
       } catch (error) {
@@ -46,7 +46,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
 
     try {
       console.log(`🔄 Submitting override for ${challenge.type}/${challenge.regionCode}: ${score}`);
-      const success = await apiService.submitAdminOverride(challenge.type, challenge.regionCode, score, overrideData.note);
+      const success = await submitAdminOverride(challenge.type, challenge.regionCode, score, overrideData.note);
       
       if (success) {
         setShowSuccessToast(true);
@@ -61,7 +61,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
         }));
         
         // Refresh the challenges list
-        const data = await apiService.getAllChallenges();
+        const data = await getAllChallenges();
         setAllChallenges(data);
         
         console.log(`✅ Successfully submitted override for ${challenge.type}/${challenge.regionCode}`);

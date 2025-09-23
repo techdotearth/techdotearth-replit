@@ -4,7 +4,7 @@ import { MiniMapPanel } from '../components/MiniMapPanel';
 import { TrendSparkCard } from '../components/TrendSparkCard';
 import { AdminNoteInline } from '../components/AdminNoteInline';
 import { ChallengeType } from '../App';
-import { apiService, Challenge } from '../services/api';
+import { getChallengeDetail, Challenge } from '../services/api';
 interface ChallengeDetailProps {
   challengeId: string;
   challengeType: ChallengeType;
@@ -26,7 +26,7 @@ export const ChallengeDetail: React.FC<ChallengeDetailProps> = ({
       setLoading(true);
       try {
         console.log(`🔄 Fetching challenge detail for ${challengeType}/${regionCode}`);
-        const data = await apiService.getChallengeDetail(challengeType, regionCode);
+        const data = await getChallengeDetail(challengeType, regionCode);
         setChallenge(data);
         console.log(`✅ Loaded challenge detail:`, data);
       } catch (error) {
