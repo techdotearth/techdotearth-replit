@@ -11,7 +11,7 @@ app.listen(PORT, () => {
   console.log(`📊 API endpoints available at http://localhost:${PORT}/api/`);
   
   // Start scheduled tasks
-  scheduler.start();
+  // scheduler.start();
   
   console.log(`⏰ Cron scheduler started for air quality ingestion`);
 });
