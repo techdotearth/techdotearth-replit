@@ -1,13 +1,13 @@
-// API service for connecting frontend to backend
+// API service for connecting frontend to Supabase Edge Functions
 import { ChallengeType } from '../App';
+import { supabase, edgeFunctions } from './supabase';
 
-// Get the backend API base URL from environment or use localhost for development
+// Base URL for direct edge function calls (fallback)
 const getApiBaseUrl = () => {
-  // In Replit, use the backend port with the proper domain
+  // For now, keep the Express backend as fallback during migration
   if (typeof window !== 'undefined') {
     const protocol = window.location.protocol;
     const hostname = window.location.hostname;
-    // Use port 3001 for backend API
     return `${protocol}//${hostname}:3001`;
   }
   return 'http://localhost:3001';
@@ -97,6 +97,41 @@ class ApiService {
     }
   }
 
+  // Convert Supabase response to frontend Challenge format
+  private convertSupabaseToChallenge(items: any[], type: ChallengeType): Challenge[] {
+    return items.map((item, index) => {
+      const sourceMap: Record<ChallengeType, Challenge['sources']> = {
+        'air-quality': ['EEA', 'GHSL'],
+        'heat': ['Meteoalarm', 'GHSL'],
+        'floods': ['EA', 'GloFAS', 'GHSL'],
+        'wildfire': ['FIRMS', 'GHSL']
+      };
+
+      const exposureTrend: 'up' | 'down' | 'flat' = 
+        item.intensity > 0.7 ? 'up' : 
+        item.intensity < 0.3 ? 'down' : 'flat';
+
+      return {
+        id: `${type}-${item.region_name || item.region_code}`,
+        type,
+        regionName: item.region_name,
+        regionCode: item.region_code || item.region_name,
+        countryCode: item.country_code,
+        score: parseInt(item.display_score || item.score),
+        freshness: item.freshness as Challenge['freshness'],
+        intensity: parseFloat(item.intensity || '0'),
+        exposure: item.peopleexposed ? parseFloat(item.peopleexposed) : undefined,
+        persistence: item.persistence ? parseFloat(item.persistence) : undefined,
+        peopleExposed: item.people_exposed || 0,
+        exposureTrend,
+        updatedIso: item.created_at || item.updated_at || new Date().toISOString(),
+        sources: sourceMap[type],
+        hasOverride: false,
+        rank: index + 1
+      };
+    });
+  }
+
   // Convert backend leaderboard response to frontend Challenge format
   private convertToChallenge(item: LeaderboardItem, rank: number): Challenge {
     // Map backend challenge types to frontend types
@@ -150,23 +185,41 @@ class ApiService {
     };
   }
 
-  // Get leaderboard data for a specific challenge type
+  // Get leaderboard data for a specific challenge type using Supabase
   async getChallenges(type: ChallengeType): Promise<Challenge[]> {
     try {
+      console.log(`🔄 Fetching challenges for ${type}`);
+      
       const typeMap: Record<ChallengeType, string> = {
-        'air-quality': 'air_quality',
+        'air-quality': 'air-quality',
         'heat': 'heat',
         'floods': 'floods',
         'wildfire': 'wildfire'
       };
 
       const backendType = typeMap[type];
-      const response = await this.fetchApi<LeaderboardResponse>(`/api/leaderboard?type=${backendType}`);
       
-      return response
-        .filter(item => item.type === backendType)
-        .map((item, index) => this.convertToChallenge(item, index + 1))
-        .sort((a, b) => b.score - a.score);
+      // Try Supabase direct query first
+      const { data, error } = await supabase
+        .from('v_leaderboard')
+        .select('*')
+        .eq('type', backendType)
+        .order('display_score', { ascending: false });
+
+      if (error) {
+        console.error('Supabase query error:', error);
+        // Fallback to edge function
+        const response = await fetch(`${edgeFunctions.publicApi}/api/leaderboard/${backendType}`);
+        if (!response.ok) {
+          throw new Error(`Edge function error: ${response.status}`);
+        }
+        const fallbackData = await response.json();
+        return this.convertSupabaseToChallenge(fallbackData || [], type);
+      }
+
+      console.log(`✅ Loaded ${data?.length || 0} challenges for ${type}`);
+      return this.convertSupabaseToChallenge(data || [], type);
+      
     } catch (error) {
       console.error(`❌ Failed to fetch challenges for ${type}:`, error);
       // Return empty array on error to prevent UI crashes
@@ -174,26 +227,39 @@ class ApiService {
     }
   }
 
-  // Get detailed information for a specific challenge
+  // Get detailed information for a specific challenge using Supabase RPC
   async getChallengeDetail(type: ChallengeType, regionCode: string): Promise<Challenge | null> {
     try {
       const typeMap: Record<ChallengeType, string> = {
-        'air-quality': 'air_quality',
+        'air-quality': 'air-quality',
         'heat': 'heat',
         'floods': 'floods',
         'wildfire': 'wildfire'
       };
 
       const backendType = typeMap[type];
-      const response = await this.fetchApi<ChallengeDetailResponse>(`/api/challenge/${backendType}/${regionCode}`);
       
-      // Use actual people exposed from backend, fallback to 0 if not available
-      const peopleExposed = response.inputs_json?.people || 0;
-      const exposureTrend: 'up' | 'down' | 'flat' = 
-        response.intensity > 0.7 ? 'up' : 
-        response.intensity < 0.3 ? 'down' : 'flat';
+      // Try Supabase RPC function first
+      const { data, error } = await supabase.rpc('challenge_detail', {
+        challenge_type: backendType,
+        region_name: regionCode
+      });
 
-      // Map sources based on challenge type
+      if (error) {
+        console.error('Supabase RPC error:', error);
+        // Fallback to edge function
+        const response = await fetch(`${edgeFunctions.publicApi}/api/challenge/${backendType}/${regionCode}`);
+        if (!response.ok) {
+          return null;
+        }
+        return await response.json();
+      }
+
+      if (!data) {
+        return null;
+      }
+
+      // Convert RPC response to Challenge format
       const sourceMap: Record<ChallengeType, Challenge['sources']> = {
         'air-quality': ['EEA', 'GHSL'],
         'heat': ['Meteoalarm', 'GHSL'],
@@ -201,23 +267,28 @@ class ApiService {
         'wildfire': ['FIRMS', 'GHSL']
       };
 
+      const peopleExposed = data.peopleExposed || 0;
+      const exposureTrend: 'up' | 'down' | 'flat' = 
+        data.intensity > 0.7 ? 'up' : 
+        data.intensity < 0.3 ? 'down' : 'flat';
+
       return {
         id: `${type}-${regionCode}`,
         type,
-        regionName: response.region_name,
-        regionCode: response.region_code,
-        countryCode: response.country_code,
-        score: response.display_score,
-        freshness: response.freshness as Challenge['freshness'],
-        intensity: response.intensity,
-        exposure: response.exposure,
-        persistence: response.persistence,
+        regionName: data.regionName,
+        regionCode: data.regionCode || regionCode,
+        countryCode: data.countryCode,
+        score: data.score,
+        freshness: data.freshness as Challenge['freshness'],
+        intensity: data.intensity,
+        exposure: data.exposure,
+        persistence: data.persistence,
         peopleExposed,
         exposureTrend,
-        updatedIso: response.as_of,
-        sources: sourceMap[type],
-        hasOverride: !!response.override_note,
-        overrideNote: response.override_note
+        updatedIso: data.updatedIso,
+        sources: data.sources || sourceMap[type],
+        hasOverride: data.hasOverride || false,
+        overrideNote: data.overrideNote
       };
     } catch (error) {
       console.error(`❌ Failed to fetch challenge detail for ${type}/${regionCode}:`, error);
@@ -225,7 +296,7 @@ class ApiService {
     }
   }
 
-  // Submit admin override
+  // Submit admin override using Supabase edge function
   async submitAdminOverride(type: ChallengeType, regionCode: string, score: number, note: string): Promise<boolean> {
     try {
       const typeMap: Record<ChallengeType, string> = {
@@ -235,10 +306,11 @@ class ApiService {
         'wildfire': 'wildfire'
       };
 
-      await this.fetchApi('/api/admin/override', {
+      const response = await fetch(`${edgeFunctions.adminApi}/api/admin/override`, {
         method: 'POST',
         headers: {
-          'Authorization': 'Bearer admin-token', // TODO: Use proper auth in production
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer admin-token', // TODO: Use proper Supabase auth
         },
         body: JSON.stringify({
           type: typeMap[type],
@@ -247,6 +319,10 @@ class ApiService {
           note
         })
       });
+
+      if (!response.ok) {
+        throw new Error(`Admin override failed: ${response.status}`);
+      }
 
       return true;
     } catch (error) {
@@ -272,7 +348,7 @@ class ApiService {
     }
   }
 
-  // Trigger score computation
+  // Trigger score computation using Supabase edge function
   async computeScores(types?: ChallengeType[]): Promise<boolean> {
     try {
       const typeMap: Record<ChallengeType, string> = {
@@ -284,10 +360,17 @@ class ApiService {
 
       const backendTypes = types ? types.map(t => typeMap[t]) : Object.values(typeMap);
 
-      await this.fetchApi('/api/compute-scores', {
+      const response = await fetch(`${edgeFunctions.ingestionApi}/api/compute-scores`, {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({ types: backendTypes })
       });
+
+      if (!response.ok) {
+        throw new Error(`Score computation failed: ${response.status}`);
+      }
 
       return true;
     } catch (error) {
