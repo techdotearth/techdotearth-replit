@@ -16,7 +16,7 @@ export class CronScheduler {
     console.log('⏰ Starting cron scheduler...');
     
     // Air Quality Ingestion: Every hour on the hour (0 * * * *)
-    this.scheduleAirQualityIngestion();
+    // this.scheduleAirQualityIngestion();
 
     console.log(`✅ Started ${this.scheduledTasks.size} scheduled tasks`);
     this.logScheduledTasks();
